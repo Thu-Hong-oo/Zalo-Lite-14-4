@@ -7,3 +7,4 @@ backend/user-service/node_modules/
 backend/user-service/.env
 backend/user-service/package-lock.json
 backend/user-service/package.json
+frontend/Web/node_modules/
