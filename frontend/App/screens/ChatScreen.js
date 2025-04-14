@@ -13,7 +13,6 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { getConversations } from "../modules/chat/controller";
-import { getUserByPhone } from "../modules/user/controller";
 import api from "../config/api";
 
 // Enable logging in development
@@ -108,6 +107,7 @@ export default function ChatListScreen({ navigation }) {
               avatar: userInfo?.avatar || null,
               isFromMe: conv.lastMessage.isFromMe,
               unreadCount: conv.unreadCount || 0,
+              otherParticipantPhone: otherParticipant.phone,
             };
           })
         );
@@ -161,9 +161,9 @@ export default function ChatListScreen({ navigation }) {
     <TouchableOpacity
       style={styles.chatItem}
       onPress={() =>
-        navigation.navigate("ChatDetail", {
-          chatId: item.id,
+        navigation.navigate("ChatDirectly", {
           title: item.title,
+          otherParticipantPhone: item.otherParticipantPhone,
           avatar: item.avatar,
         })
       }
