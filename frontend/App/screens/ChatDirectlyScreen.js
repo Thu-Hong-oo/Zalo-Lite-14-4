@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -8,12 +8,212 @@ import {
   SafeAreaView,
   StatusBar,
   Image,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { io } from "socket.io-client";
+import { getChatHistory, sendMessage } from "../modules/chat/controller";
+import { getAccessToken } from "../services/storage";
 
 const ChatDirectlyScreen = ({ route, navigation }) => {
   const [message, setMessage] = useState("");
-  const { user } = route.params; // Nhận thông tin user từ navigation params
+  const [messages, setMessages] = useState([]);
+  const [isTyping, setIsTyping] = useState(false);
+  const [socket, setSocket] = useState(null);
+  const flatListRef = useRef(null);
+  const { title, otherParticipantPhone, avatar } = route.params;
+
+  useEffect(() => {
+    initializeSocket();
+    loadChatHistory();
+
+    return () => {
+      if (socket) {
+        socket.disconnect();
+      }
+    };
+  }, []);
+
+  //khởi tạo socket
+
+  const initializeSocket = async () => {
+    try {
+      const token = await getAccessToken();
+      const newSocket = io("http://192.168.2.118:3000", {
+        auth: {
+          token,
+        },
+        transports: ["websocket", "polling"],
+        forceNew: true,
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+        timeout: 20000,
+      });
+
+      newSocket.on("connect", () => {
+        console.log("Connected to socket server");
+      });
+
+      newSocket.on("connect_error", (error) => {
+        console.error("Socket connection error:", error);
+      });
+
+      newSocket.on("disconnect", (reason) => {
+        console.log("Socket disconnected:", reason);
+      });
+
+      newSocket.on("error", (error) => {
+        console.error("Socket error:", error);
+      });
+
+      newSocket.on("new-message", (message) => {
+        setMessages((prev) => [...prev, message]);
+        scrollToBottom();
+      });
+
+      newSocket.on("typing", ({ senderPhone }) => {
+        if (senderPhone === otherParticipantPhone) {
+          setIsTyping(true);
+        }
+      });
+
+      newSocket.on("stop-typing", ({ senderPhone }) => {
+        if (senderPhone === otherParticipantPhone) {
+          setIsTyping(false);
+        }
+      });
+
+      setSocket(newSocket);
+    } catch (error) {
+      console.error("Socket initialization error:", error);
+    }
+  };
+
+  const loadChatHistory = async () => {
+    try {
+      const response = await getChatHistory(otherParticipantPhone);
+      if (response.status === "success" && response.data.messages) {
+        setMessages(response.data.messages);
+        scrollToBottom();
+      }
+    } catch (error) {
+      console.error("Error loading chat history:", error);
+    }
+  };
+
+  const scrollToBottom = () => {
+    if (flatListRef.current) {
+      flatListRef.current.scrollToEnd({ animated: true });
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!message.trim() || !socket) return;
+
+    try {
+      // Gửi tin nhắn qua socket
+      socket.emit("send-message", {
+        receiverPhone: otherParticipantPhone,
+        content: message,
+      });
+
+      // Thêm tin nhắn vào danh sách ngay lập tức
+      const newMessage = {
+        messageId: Date.now().toString(), // Tạm thời sử dụng timestamp làm ID
+        senderPhone: "me", // Đảo ngược vì đây là tin nhắn của mình
+        content: message,
+        timestamp: Date.now(),
+        status: "sending",
+      };
+
+      setMessages((prev) => [...prev, newMessage]);
+      setMessage("");
+      scrollToBottom();
+
+      // Lắng nghe phản hồi từ server
+      socket.once("message-sent", (response) => {
+        // Cập nhật trạng thái tin nhắn
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === newMessage.messageId
+              ? { ...msg, status: "sent" }
+              : msg
+          )
+        );
+      });
+
+      socket.once("error", (error) => {
+        console.error("Error sending message:", error);
+        // Cập nhật trạng thái lỗi
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === newMessage.messageId
+              ? { ...msg, status: "error" }
+              : msg
+          )
+        );
+      });
+
+      socket.emit("stop-typing", { receiverPhone: otherParticipantPhone });
+    } catch (error) {
+      console.error("Error sending message:", error);
+    }
+  };
+
+  const handleTyping = () => {
+    if (socket) {
+      socket.emit("typing", { receiverPhone: otherParticipantPhone });
+    }
+  };
+
+  const handleStopTyping = () => {
+    if (socket) {
+      socket.emit("stop-typing", { receiverPhone: otherParticipantPhone });
+    }
+  };
+
+  const renderMessage = ({ item }) => {
+    //nếu senderPhone khác otherParticipantPhone thì là tin nhắn của mình
+    const isMyMessage =
+      item.senderPhone != otherParticipantPhone || item.senderPhone == "me";
+
+    return (
+      <View
+        style={[
+          styles.messageContainer,
+          isMyMessage ? styles.myMessage : styles.otherMessage,
+        ]}
+      >
+        <Text
+          style={[
+            styles.messageText,
+            isMyMessage ? styles.myMessageText : styles.otherMessageText,
+          ]}
+        >
+          {item.content}
+        </Text>
+        <View style={styles.messageFooter}>
+          <Text style={styles.messageTime}>
+            {new Date(item.timestamp).toLocaleTimeString()}
+          </Text>
+          {isMyMessage && (
+            <Text style={styles.messageStatus}>
+              {item.status === "sending"
+                ? "Đang gửi..."
+                : item.status === "sent"
+                ? "✓"
+                : item.status === "error"
+                ? "✕"
+                : ""}
+            </Text>
+          )}
+        </View>
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -29,9 +229,16 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
             <Ionicons name="arrow-back" size={24} color="white" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.userInfo}>
-            <Text style={styles.headerTitle}>{user?.name || "User Name"}</Text>
-          </TouchableOpacity>
+          <View style={styles.userInfo}>
+            {avatar ? (
+              <Image source={{ uri: avatar }} style={styles.avatar} />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Text style={styles.avatarText}>{title.slice(0, 2)}</Text>
+              </View>
+            )}
+            <Text style={styles.headerTitle}>{title}</Text>
+          </View>
 
           <View style={styles.headerActions}>
             <TouchableOpacity style={styles.actionButton}>
@@ -40,17 +247,30 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
             <TouchableOpacity style={styles.actionButton}>
               <Ionicons name="videocam" size={24} color="white" />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton}>
-              <Ionicons name="ellipsis-vertical" size={24} color="white" />
-            </TouchableOpacity>
           </View>
         </View>
       </View>
 
       {/* Chat Messages Area */}
-      <View style={styles.chatContainer}>
-        {/* Messages will be rendered here */}
-      </View>
+      <KeyboardAvoidingView
+        style={styles.chatContainer}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+      >
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderMessage}
+          keyExtractor={(item) => item.messageId}
+          onContentSizeChange={scrollToBottom}
+          onLayout={scrollToBottom}
+        />
+        {isTyping && (
+          <View style={styles.typingIndicator}>
+            <Text style={styles.typingText}>Đang soạn tin nhắn...</Text>
+          </View>
+        )}
+      </KeyboardAvoidingView>
 
       {/* Message Input */}
       <View style={styles.inputContainer}>
@@ -63,17 +283,22 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
           placeholder="Tin nhắn"
           value={message}
           onChangeText={setMessage}
+          onFocus={handleTyping}
+          onBlur={handleStopTyping}
           multiline
         />
 
-        <View style={styles.inputActions}>
-          <TouchableOpacity style={styles.inputActionButton}>
-            <Ionicons name="image-outline" size={24} color="#666" />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.inputActionButton}>
-            <Ionicons name="mic-outline" size={24} color="#666" />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={styles.sendButton}
+          onPress={handleSendMessage}
+          disabled={!message.trim()}
+        >
+          <Ionicons
+            name="send"
+            size={24}
+            color={message.trim() ? "#1877f2" : "#666"}
+          />
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -104,6 +329,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginLeft: 10,
   },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  avatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  avatarText: {
+    color: "#1877f2",
+    fontWeight: "bold",
+  },
   headerTitle: {
     color: "#FFFFFF",
     fontSize: 18,
@@ -120,6 +364,41 @@ const styles = StyleSheet.create({
   chatContainer: {
     flex: 1,
     padding: 10,
+  },
+  messageContainer: {
+    maxWidth: "80%",
+    padding: 10,
+    borderRadius: 10,
+    marginVertical: 5,
+  },
+  myMessage: {
+    alignSelf: "flex-end",
+    backgroundColor: "#1877f2",
+  },
+  otherMessage: {
+    alignSelf: "flex-start",
+    backgroundColor: "#fff",
+  },
+  messageText: {
+    color: "#000",
+    fontSize: 16,
+  },
+  messageTime: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 5,
+    alignSelf: "flex-end",
+  },
+  typingIndicator: {
+    padding: 10,
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    marginVertical: 5,
+    alignSelf: "flex-start",
+  },
+  typingText: {
+    color: "#666",
+    fontStyle: "italic",
   },
   inputContainer: {
     flexDirection: "row",
@@ -144,13 +423,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginHorizontal: 5,
   },
-  inputActions: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  inputActionButton: {
+  sendButton: {
     padding: 5,
     marginLeft: 5,
+  },
+  messageFooter: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    marginTop: 5,
+  },
+  messageStatus: {
+    marginLeft: 5,
+    fontSize: 12,
+    color: "#666",
+  },
+  myMessageText: {
+    color: "white",
+  },
+  otherMessageText: {
+    color: "black",
   },
 });
 
