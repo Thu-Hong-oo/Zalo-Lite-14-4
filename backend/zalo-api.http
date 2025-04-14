@@ -35,7 +35,7 @@ Content-Type: application/json
 
 {
     "phone": "0376963653",
-    "password": "12345678"
+    "password": "123456"
 }
 
 ### Làm mới token

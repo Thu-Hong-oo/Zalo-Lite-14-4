@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { Routes, Route, Navigate, useNavigate } from "react-router-dom"
 import {
   Search,
   MessageCircle,
@@ -20,17 +21,37 @@ import {
 import "bootstrap/dist/css/bootstrap.min.css"
 import "./App.css"
 
-export default function App() {
+// Components
+import Login from "./components/Login"
+
+function MainApp() {
   const [activeTab, setActiveTab] = useState("Ưu tiên")
   const [currentSlide, setCurrentSlide] = useState(0)
+  const [user, setUser] = useState(null)
+  const [showProfileMenu, setShowProfileMenu] = useState(false)
+  const navigate = useNavigate()
 
-  // Bootstrap requires JavaScript for some components
   useEffect(() => {
-    // Import Bootstrap JS only on client side
-    if (typeof window !== "undefined") {
-      require("bootstrap/dist/js/bootstrap.bundle.min.js")
+    // Lấy thông tin user từ localStorage khi component mount
+    const userStr = localStorage.getItem("user")
+    if (userStr) {
+      try {
+        const userData = JSON.parse(userStr)
+        setUser(userData)
+      } catch (err) {
+        console.error("Error parsing user data:", err)
+      }
     }
   }, [])
+
+  const handleLogout = () => {
+    // Xóa thông tin đăng nhập
+    localStorage.removeItem("accessToken")
+    localStorage.removeItem("refreshToken")
+    localStorage.removeItem("user")
+    // Chuyển về trang login
+    navigate("/login", { replace: true })
+  }
 
   const handlePrevSlide = () => {
     setCurrentSlide((prev) => (prev > 0 ? prev - 1 : 0))
@@ -40,243 +61,324 @@ export default function App() {
     setCurrentSlide((prev) => (prev < 4 ? prev + 1 : 4))
   }
 
+  const slides = [
+    {
+      id: 1,
+      image: "/images/slide1.png",
+      title: "Nhắn tin nhiều hơn, soạn thảo ít hơn",
+      description: "Sử dụng Tin Nhắn Nhanh để lưu sẵn các tin nhắn thường dùng và gửi nhanh trong hội thoại bất kỳ."
+    },
+    {
+      id: 2,
+      image: "/images/slide2.png",
+      title: "Trải nghiệm xuyên suốt",
+      description: "Kết nối và giải quyết công việc trên mọi thiết bị với dữ liệu luôn được đồng bộ."
+    },
+    {
+      id: 3,
+      image: "/images/slide3.png",
+      title: "Gửi file không giới hạn",
+      description: "Chia sẻ hình ảnh, file văn bản, bảng tính... với dung lượng không giới hạn."
+    },
+    {
+      id: 4,
+      image: "/images/slide4.png",
+      title: "Chat nhóm với đồng nghiệp",
+      description: "Trao đổi công việc nhóm một cách hiệu quả trong không gian làm việc riêng."
+    }
+  ]
+
   return (
     <div className="d-flex vh-100" style={{ backgroundColor: "#f0f5ff" }}>
-      {/* Left sidebar */}
-      <div className="d-flex flex-column align-items-center py-4" style={{ width: "64px", backgroundColor: "#0068ff" }}>
-        <div className="rounded-circle bg-white mb-4 overflow-hidden" style={{ width: "40px", height: "40px" }}>
-          <img src="/placeholder.svg?height=40&width=40" alt="Profile" className="w-100 h-100 object-fit-cover" />
-        </div>
-
-        <div className="d-flex flex-column align-items-center gap-4 flex-grow-1">
-          <button
-            className="d-flex align-items-center justify-content-center text-white rounded"
-            style={{ width: "40px", height: "40px", backgroundColor: "#0055cc" }}
-          >
-            <MessageCircle size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <FileText size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <CheckSquare size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <Database size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <Cloud size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <Briefcase size={20} />
-          </button>
-        </div>
-
-        <button
-          className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent mt-auto"
-          style={{ width: "40px", height: "40px" }}
-        >
-          <Settings size={20} />
-        </button>
-      </div>
-
-      {/* Chat list */}
-      <div className="bg-white border-end" style={{ width: "320px" }}>
-        <div className="p-3">
-          <div className="position-relative">
-            <Search className="position-absolute start-0 top-50 translate-middle-y ms-3 text-secondary" size={18} />
-            <input
-              type="text"
-              placeholder="Tìm kiếm"
-              className="form-control bg-light rounded-pill ps-5 pe-5"
-              style={{ fontSize: "0.875rem" }}
-            />
-            <div className="position-absolute end-0 top-50 translate-middle-y me-2 d-flex gap-2">
-              <button className="btn btn-sm text-secondary p-1">
-                <User size={18} />
-              </button>
-              <button className="btn btn-sm text-secondary p-1">
-                <Users size={18} />
-              </button>
+      {/* Sidebar */}
+      <div className="sidebar">
+        <div className="sidebar-top">
+          <div className="user-profile" style={{ position: 'relative' }}>
+            <div 
+              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              style={{ cursor: 'pointer' }}
+            >
+              <img 
+                src={user?.avatar} 
+                alt={user?.name || "User"} 
+                className="avatar"
+                title={user?.name || "User"}
+                onError={(e) => {
+                  e.target.onerror = null;
+                  // Nếu avatar không load được, sử dụng UI Avatars làm fallback
+                  e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user?.name || "User")}&background=random`;
+                }}
+                style={{
+                  width: "48px",
+                  height: "48px",
+                  borderRadius: "50%",
+                  objectFit: "cover"
+                }}
+              />
+              {user?.status === "online" && (
+                <span className="status-badge"></span>
+              )}
             </div>
+
+            {/* Profile Dropdown Menu */}
+            {showProfileMenu && (
+              <div 
+                style={{
+                  position: 'absolute',
+                  left: '60px',
+                  top: '0',
+                  backgroundColor: 'white',
+                  borderRadius: '8px',
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+                  width: '280px',
+                  zIndex: 1000,
+                }}
+              >
+                {/* User Info */}
+                <div style={{ padding: '16px', borderBottom: '1px solid #E6E8EB' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+                    <img 
+                      src={user?.avatar} 
+                      alt={user?.name}
+                      style={{
+                        width: '64px',
+                        height: '64px',
+                        borderRadius: '50%',
+                        marginRight: '12px',
+                        objectFit: 'cover'
+                      }}
+                      onError={(e) => {
+                        e.target.onerror = null;
+                        e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user?.name || "User")}&background=random`;
+                      }}
+                    />
+                    <div>
+                      <h3 style={{ 
+                        margin: '0', 
+                        fontSize: '16px', 
+                        fontWeight: '600',
+                        color: '#081C36'
+                      }}>{user?.name}</h3>
+                      <p style={{ 
+                        margin: '4px 0 0', 
+                        fontSize: '14px',
+                        color: '#7589A3' 
+                      }}>{user?.phone}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Menu Items */}
+                <div style={{ padding: '8px 0' }}>
+                  <button 
+                    onClick={() => {/* TODO: Xử lý xem thông tin cá nhân */}}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '12px 16px',
+                      width: '100%',
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      color: '#081C36',
+                      fontSize: '14px',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <User size={20} style={{ marginRight: '12px', color: '#7589A3' }} />
+                    Thông tin cá nhân
+                  </button>
+                  <button 
+                    onClick={handleLogout}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '12px 16px',
+                      width: '100%',
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      color: '#FF4D4F',
+                      fontSize: '14px',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <Settings size={20} style={{ marginRight: '12px' }} />
+                    Đăng xuất
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="nav-items">
+            <button className="nav-item active">
+              <MessageCircle size={24} />
+            </button>
+            <button className="nav-item">
+              <Users size={24} />
+            </button>
+            <button className="nav-item">
+              <FileText size={24} />
+            </button>
+            <button className="nav-item">
+              <Cloud size={24} />
+            </button>
+            <button className="nav-item">
+              <CheckSquare size={24} />
+            </button>
+            <button className="nav-item">
+              <Database size={24} />
+            </button>
+            <button className="nav-item">
+              <Briefcase size={24} />
+            </button>
           </div>
         </div>
+        <div className="sidebar-bottom">
+          <button className="nav-item">
+            <Settings size={24} />
+          </button>
+        </div>
+      </div>
 
-        <div className="d-flex border-bottom">
+      {/* Chat List */}
+      <div className="chat-list">
+        <div className="chat-list-header">
+          <div className="search-box">
+            <Search size={20} className="search-icon" />
+            <input type="text" placeholder="Tìm kiếm" />
+          </div>
+          <button className="add-chat-btn">
+            <MessageCircle size={20} />
+            <span>Tạo nhóm mới</span>
+          </button>
+        </div>
+
+        <div className="chat-tabs">
           <button
-            className={`flex-grow-1 py-2 border-0 bg-transparent ${
-              activeTab === "Ưu tiên" ? "text-primary border-bottom border-3 border-primary" : "text-secondary"
-            }`}
-            style={{ fontSize: "0.875rem", fontWeight: "500" }}
+            className={`chat-tab ${activeTab === "Ưu tiên" ? "active" : ""}`}
             onClick={() => setActiveTab("Ưu tiên")}
           >
             Ưu tiên
           </button>
           <button
-            className={`flex-grow-1 py-2 border-0 bg-transparent ${
-              activeTab === "Khác" ? "text-primary border-bottom border-3 border-primary" : "text-secondary"
-            }`}
-            style={{ fontSize: "0.875rem", fontWeight: "500" }}
+            className={`chat-tab ${activeTab === "Khác" ? "active" : ""}`}
             onClick={() => setActiveTab("Khác")}
           >
             Khác
           </button>
-
-          <div className="d-flex align-items-center px-3">
-            <button className="btn btn-sm text-secondary p-0 d-flex align-items-center">
-              <span style={{ fontSize: "0.875rem" }}>Phân loại</span>
-              <ChevronLeft size={16} />
-            </button>
-            <button className="btn btn-sm text-secondary p-0 ms-2">
-              <MoreHorizontal size={18} />
-            </button>
-          </div>
+          <button
+            className={`chat-tab ${activeTab === "Tất cả" ? "active" : ""}`}
+            onClick={() => setActiveTab("Tất cả")}
+          >
+            Tất cả
+          </button>
         </div>
 
-        <div className="overflow-auto" style={{ height: "calc(100% - 110px)" }}>
-          {/* Chat items */}
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="SinhVien_Nganh_SE_Khoa"
-            message="Nguyen Thi Hanh: Các bạn hãy tha..."
-            time="3 ngày"
-            count="99+"
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="DHKHMT18ATT_QLDA"
-            message="Chưa có tin nhắn"
-            time=""
-            count="51"
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="422000191402_17BTT_HK2_..."
-            message="Em đứng ở V7.02 từ chiều"
-            time="2 ngày"
-            count="53"
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="CNM-HK2-24-25KTPM17BTT..."
-            message="Chưa có tin nhắn"
-            time=""
-            count="47"
-            badge="GK"
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="IUH HK2 2025 Big Data"
-            message="Bé Văn lêu khêu: Hình ảnh"
-            time="2 ngày"
-            count="99+"
-            hasImage={true}
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40"]}
-            name="Cloud của tôi"
-            message="Bạn: Hình ảnh"
-            time="3 phút"
-            hasImage={true}
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="PG/PB MC Mascot Eve..."
-            message="Mr Trị: Mình cần 2b PG tiếc ngoại ..."
-            time="32 phút"
-            count="84"
-            hasMore={true}
-          />
+        <div className="chat-items">
+          {/* Chat items will be rendered here */}
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="flex-grow-1 d-flex flex-column align-items-center justify-content-center position-relative">
-        <div className="text-center" style={{ maxWidth: "32rem" }}>
-          <h1 className="fw-bold mb-4 fs-2">
-            Chào mừng đến với <span style={{ color: "#0068ff" }}>Zalo PC</span>!
-          </h1>
-          <p className="text-secondary mb-4">
-            Khám phá những tiện ích hỗ trợ làm việc và trò chuyện cùng người thân, bạn bè được tối ưu hoá cho máy tính
-            của bạn.
-          </p>
-
-          <div className="position-relative" style={{ height: "16rem" }}>
-            {currentSlide === 0 && (
-              <div className="position-absolute top-0 start-0 end-0 bottom-0 d-flex justify-content-center">
-                <img
-                  src="/welcome.png"
-                  alt="Zalo features"
-                  className="h-100 object-fit-contain"
-                />
-              </div>
-            )}
-          </div>
-
-          <h3 className="fs-4 fw-medium mt-4" style={{ color: "#0068ff" }}>
-            Nhắn tin nhiều hơn, soạn thảo ít hơn
-          </h3>
-          <p className="text-secondary mt-2">
-            Sử dụng <strong>Tin Nhắn Nhanh</strong> để lưu sẵn các tin nhắn thường dùng và gửi nhanh trong hội thoại bất
-            kỳ.
-          </p>
-
-          <div className="d-flex justify-content-center mt-4">
-            <div className="d-flex gap-2">
-              {[0, 1, 2, 3, 4].map((index) => (
-                <button
-                  key={index}
-                  className="border-0 rounded-circle"
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    backgroundColor: currentSlide === index ? "#0068ff" : "#dee2e6",
-                  }}
-                  onClick={() => setCurrentSlide(index)}
-                />
-              ))}
+      {/* Main Content */}
+      <div className="main-content">
+        <div className="welcome-screen">
+          <div className="carousel-container">
+            <button className="carousel-btn prev" onClick={handlePrevSlide}>
+              <ChevronLeft size={24} />
+            </button>
+            <div className="carousel-content">
+              {slides[currentSlide] && (
+                <>
+                  <img
+                    src={slides[currentSlide].image}
+                    alt={slides[currentSlide].title}
+                    className="carousel-image"
+                  />
+                  <div className="welcome-text">
+                    <h2>{slides[currentSlide].title}</h2>
+                    <p>{slides[currentSlide].description}</p>
+                  </div>
+                </>
+              )}
             </div>
+            <button className="carousel-btn next" onClick={handleNextSlide}>
+              <ChevronRight size={24} />
+            </button>
+          </div>
+          
+          {/* Slide indicators */}
+          <div className="carousel-indicators">
+            {slides.map((slide, index) => (
+              <button
+                key={slide.id}
+                className={`carousel-indicator ${currentSlide === index ? 'active' : ''}`}
+                onClick={() => setCurrentSlide(index)}
+              />
+            ))}
           </div>
         </div>
-
-        <button
-          className="position-absolute start-0 top-50 translate-middle-y ms-4 rounded-circle bg-white shadow-sm border-0 d-flex align-items-center justify-content-center"
-          style={{ width: "40px", height: "40px" }}
-          onClick={handlePrevSlide}
-        >
-          <ChevronLeft size={20} />
-        </button>
-
-        <button
-          className="position-absolute end-0 top-50 translate-middle-y me-4 rounded-circle bg-white shadow-sm border-0 d-flex align-items-center justify-content-center"
-          style={{ width: "40px", height: "40px" }}
-          onClick={handleNextSlide}
-        >
-          <ChevronRight size={20} />
-        </button>
       </div>
     </div>
+  )
+}
+
+export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    // Kiểm tra token và user data khi component mount
+    const checkAuth = () => {
+      const token = localStorage.getItem("accessToken")
+      const userStr = localStorage.getItem("user")
+      
+      if (token && userStr) {
+        try {
+          const userData = JSON.parse(userStr)
+          if (userData) {
+            setIsAuthenticated(true)
+          }
+        } catch (err) {
+          console.error("Error parsing user data:", err)
+          // Xóa dữ liệu không hợp lệ
+          localStorage.removeItem("accessToken")
+          localStorage.removeItem("user")
+        }
+      }
+      setIsLoading(false)
+    }
+
+    checkAuth()
+  }, [])
+
+  if (isLoading) {
+    return <div>Loading...</div>
+  }
+
+  return (
+    <Routes>
+      <Route 
+        path="/login" 
+        element={
+          isAuthenticated ? 
+            <Navigate to="/app" replace /> : 
+            <Login setIsAuthenticated={setIsAuthenticated} />
+        } 
+      />
+      <Route 
+        path="/app/*" 
+        element={
+          isAuthenticated ? 
+            <MainApp /> : 
+            <Navigate to="/login" replace />
+        } 
+      />
+      <Route 
+        path="/" 
+        element={<Navigate to={isAuthenticated ? "/app" : "/login"} replace />} 
+      />
+    </Routes>
   )
 }
 
