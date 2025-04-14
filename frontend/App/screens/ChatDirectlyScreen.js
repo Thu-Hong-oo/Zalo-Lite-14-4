@@ -35,6 +35,8 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     };
   }, []);
 
+  //khởi tạo socket
+
   const initializeSocket = async () => {
     try {
       const token = await getAccessToken();
