@@ -28,6 +28,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   useEffect(() => {
     initializeSocket();
     loadChatHistory();
+
     return () => {
       if (socket) {
         socket.disconnect();
@@ -40,14 +41,32 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const initializeSocket = async () => {
     try {
       const token = await getAccessToken();
-      const newSocket = io("http://localhost:3000", {
+      const newSocket = io("http://192.168.2.118:3000", {
         auth: {
           token,
         },
+        transports: ["websocket", "polling"],
+        forceNew: true,
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+        timeout: 20000,
       });
 
       newSocket.on("connect", () => {
         console.log("Connected to socket server");
+      });
+
+      newSocket.on("connect_error", (error) => {
+        console.error("Socket connection error:", error);
+      });
+
+      newSocket.on("disconnect", (reason) => {
+        console.log("Socket disconnected:", reason);
+      });
+
+      newSocket.on("error", (error) => {
+        console.error("Socket error:", error);
       });
 
       newSocket.on("new-message", (message) => {
@@ -104,7 +123,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
       // Thêm tin nhắn vào danh sách ngay lập tức
       const newMessage = {
         messageId: Date.now().toString(), // Tạm thời sử dụng timestamp làm ID
-        senderPhone: otherParticipantPhone, // Đảo ngược vì đây là tin nhắn của mình
+        senderPhone: "me", // Đảo ngược vì đây là tin nhắn của mình
         content: message,
         timestamp: Date.now(),
         status: "sending",
@@ -157,18 +176,21 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   };
 
   const renderMessage = ({ item }) => {
-    const isMyMessage = item.senderPhone === otherParticipantPhone;
+    //nếu senderPhone khác otherParticipantPhone thì là tin nhắn của mình
+    const isMyMessage =
+      item.senderPhone != otherParticipantPhone || item.senderPhone == "me";
+
     return (
       <View
         style={[
           styles.messageContainer,
-          isMyMessage ? styles.otherMessage : styles.myMessage,
+          isMyMessage ? styles.myMessage : styles.otherMessage,
         ]}
       >
         <Text
           style={[
             styles.messageText,
-            isMyMessage ? styles.otherMessageText : styles.myMessageText,
+            isMyMessage ? styles.myMessageText : styles.otherMessageText,
           ]}
         >
           {item.content}
@@ -417,10 +439,10 @@ const styles = StyleSheet.create({
     color: "#666",
   },
   myMessageText: {
-    color: "#fff",
+    color: "white",
   },
   otherMessageText: {
-    color: "#000",
+    color: "black",
   },
 });
 
