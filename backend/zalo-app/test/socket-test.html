@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Socket.IO Test</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .container {
+        display: flex;
+        gap: 20px;
+      }
+      .panel {
+        flex: 1;
+        border: 1px solid #ccc;
+        padding: 20px;
+        border-radius: 5px;
+      }
+      .log {
+        height: 300px;
+        overflow-y: auto;
+        border: 1px solid #eee;
+        padding: 10px;
+        margin-top: 10px;
+      }
+      input,
+      button {
+        margin: 5px 0;
+        padding: 8px;
+      }
+      button {
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Socket.IO Test Client</h1>
+
+    <div class="container">
+      <div class="panel">
+        <h2>Connection</h2>
+        <input
+          type="text"
+          id="token"
+          placeholder="JWT Token"
+          style="width: 100%"
+        />
+        <button onclick="connect()">Connect</button>
+        <button onclick="disconnect()">Disconnect</button>
+
+        <h2>Send Message</h2>
+        <input type="text" id="receiverPhone" placeholder="Receiver Phone" />
+        <textarea
+          id="message"
+          placeholder="Message"
+          style="width: 100%; height: 100px"
+        ></textarea>
+        <button onclick="sendMessage()">Send Message</button>
+
+        <h2>Typing</h2>
+        <input type="text" id="typingPhone" placeholder="Receiver Phone" />
+        <button onclick="startTyping()">Start Typing</button>
+        <button onclick="stopTyping()">Stop Typing</button>
+      </div>
+
+      <div class="panel">
+        <h2>Event Log</h2>
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+
+    <script>
+      let socket;
+
+      function log(message) {
+        const logDiv = document.getElementById("log");
+        logDiv.innerHTML += `<div>${new Date().toLocaleTimeString()} - ${message}</div>`;
+        logDiv.scrollTop = logDiv.scrollHeight;
+      }
+
+      function connect() {
+        const token = document.getElementById("token").value;
+        if (!token) {
+          alert("Please enter a JWT token");
+          return;
+        }
+
+        socket = io("http://localhost:3000", {
+          auth: {
+            token: token,
+          },
+        });
+
+        socket.on("connect", () => {
+          log("Connected to server");
+        });
+
+        socket.on("disconnect", () => {
+          log("Disconnected from server");
+        });
+
+        socket.on("error", (error) => {
+          log(`Error: ${error.message}`);
+        });
+
+        socket.on("message-sent", (data) => {
+          log(`Message sent: ${JSON.stringify(data)}`);
+        });
+
+        socket.on("new-message", (data) => {
+          log(`New message received: ${JSON.stringify(data)}`);
+        });
+
+        socket.on("typing", (data) => {
+          log(`User ${data.senderPhone} is typing`);
+        });
+
+        socket.on("stop-typing", (data) => {
+          log(`User ${data.senderPhone} stopped typing`);
+        });
+
+        socket.on("user-online", (data) => {
+          log(`User ${data.phone} is online`);
+        });
+
+        socket.on("user-offline", (data) => {
+          log(`User ${data.phone} is offline`);
+        });
+      }
+
+      function disconnect() {
+        if (socket) {
+          socket.disconnect();
+          log("Disconnected");
+        }
+      }
+
+      function sendMessage() {
+        if (!socket) {
+          alert("Please connect first");
+          return;
+        }
+
+        const receiverPhone = document.getElementById("receiverPhone").value;
+        const message = document.getElementById("message").value;
+
+        if (!receiverPhone || !message) {
+          alert("Please enter receiver phone and message");
+          return;
+        }
+
+        socket.emit("send-message", {
+          receiverPhone: receiverPhone,
+          content: message,
+        });
+      }
+
+      function startTyping() {
+        if (!socket) {
+          alert("Please connect first");
+          return;
+        }
+
+        const receiverPhone = document.getElementById("typingPhone").value;
+        if (!receiverPhone) {
+          alert("Please enter receiver phone");
+          return;
+        }
+
+        socket.emit("typing", {
+          receiverPhone: receiverPhone,
+        });
+      }
+
+      function stopTyping() {
+        if (!socket) {
+          alert("Please connect first");
+          return;
+        }
+
+        const receiverPhone = document.getElementById("typingPhone").value;
+        if (!receiverPhone) {
+          alert("Please enter receiver phone");
+          return;
+        }
+
+        socket.emit("stop-typing", {
+          receiverPhone: receiverPhone,
+        });
+      }
+    </script>
+  </body>
+</html>
