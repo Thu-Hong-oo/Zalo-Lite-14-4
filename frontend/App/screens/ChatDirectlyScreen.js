@@ -35,10 +35,12 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     };
   }, []);
 
+  //khởi tạo socket
+
   const initializeSocket = async () => {
     try {
       const token = await getAccessToken();
-      const newSocket = io("http://localhost:3030", {
+      const newSocket = io("http://localhost:3000", {
         auth: {
           token,
         },
@@ -93,11 +95,50 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     if (!message.trim() || !socket) return;
 
     try {
-      const response = await sendMessage(otherParticipantPhone, message);
-      if (response.status === "success") {
-        setMessage("");
-        socket.emit("stop-typing", { receiverPhone: otherParticipantPhone });
-      }
+      // Gửi tin nhắn qua socket
+      socket.emit("send-message", {
+        receiverPhone: otherParticipantPhone,
+        content: message,
+      });
+
+      // Thêm tin nhắn vào danh sách ngay lập tức
+      const newMessage = {
+        messageId: Date.now().toString(), // Tạm thời sử dụng timestamp làm ID
+        senderPhone: otherParticipantPhone, // Đảo ngược vì đây là tin nhắn của mình
+        content: message,
+        timestamp: Date.now(),
+        status: "sending",
+      };
+
+      setMessages((prev) => [...prev, newMessage]);
+      setMessage("");
+      scrollToBottom();
+
+      // Lắng nghe phản hồi từ server
+      socket.once("message-sent", (response) => {
+        // Cập nhật trạng thái tin nhắn
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === newMessage.messageId
+              ? { ...msg, status: "sent" }
+              : msg
+          )
+        );
+      });
+
+      socket.once("error", (error) => {
+        console.error("Error sending message:", error);
+        // Cập nhật trạng thái lỗi
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === newMessage.messageId
+              ? { ...msg, status: "error" }
+              : msg
+          )
+        );
+      });
+
+      socket.emit("stop-typing", { receiverPhone: otherParticipantPhone });
     } catch (error) {
       console.error("Error sending message:", error);
     }
@@ -124,10 +165,30 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
           isMyMessage ? styles.otherMessage : styles.myMessage,
         ]}
       >
-        <Text style={styles.messageText}>{item.content}</Text>
-        <Text style={styles.messageTime}>
-          {new Date(item.timestamp).toLocaleTimeString()}
+        <Text
+          style={[
+            styles.messageText,
+            isMyMessage ? styles.otherMessageText : styles.myMessageText,
+          ]}
+        >
+          {item.content}
         </Text>
+        <View style={styles.messageFooter}>
+          <Text style={styles.messageTime}>
+            {new Date(item.timestamp).toLocaleTimeString()}
+          </Text>
+          {isMyMessage && (
+            <Text style={styles.messageStatus}>
+              {item.status === "sending"
+                ? "Đang gửi..."
+                : item.status === "sent"
+                ? "✓"
+                : item.status === "error"
+                ? "✕"
+                : ""}
+            </Text>
+          )}
+        </View>
       </View>
     );
   };
@@ -343,6 +404,23 @@ const styles = StyleSheet.create({
   sendButton: {
     padding: 5,
     marginLeft: 5,
+  },
+  messageFooter: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    marginTop: 5,
+  },
+  messageStatus: {
+    marginLeft: 5,
+    fontSize: 12,
+    color: "#666",
+  },
+  myMessageText: {
+    color: "#fff",
+  },
+  otherMessageText: {
+    color: "#000",
   },
 });
 
