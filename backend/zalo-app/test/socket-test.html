@@ -35,6 +35,15 @@
       button {
         cursor: pointer;
       }
+      .file-preview {
+        max-width: 10x;
+        max-height: 10px;
+        margin: 10px 0;
+      }
+      .file-preview img, .file-preview video {
+        max-width: 10%;
+        max-height: 10%;
+      }
     </style>
   </head>
   <body>
@@ -59,7 +68,12 @@
           placeholder="Message"
           style="width: 100%; height: 100px"
         ></textarea>
-        <button onclick="sendMessage()">Send Message</button>
+        <button onclick="sendMessage()">Send Text Message</button>
+
+        <h2>Send Media Message</h2>
+        <input type="file" id="fileInput" multiple />
+        <div id="filePreview" class="file-preview"></div>
+        <button onclick="uploadAndSendMedia()">Send Media Message</button>
 
         <h2>Typing</h2>
         <input type="text" id="typingPhone" placeholder="Receiver Phone" />
@@ -75,6 +89,7 @@
 
     <script>
       let socket;
+      let selectedFiles = [];
 
       function log(message) {
         const logDiv = document.getElementById("log");
@@ -104,7 +119,7 @@
         });
 
         socket.on("error", (error) => {
-          log(`Error: ${error.message}`);
+          log(`Error: ${error.message} (Code: ${error.code})`);
         });
 
         socket.on("message-sent", (data) => {
@@ -113,6 +128,30 @@
 
         socket.on("new-message", (data) => {
           log(`New message received: ${JSON.stringify(data)}`);
+          if (data.type === 'file') {
+            const filePreview = document.createElement('div');
+            filePreview.className = 'file-preview';
+            
+            if (data.fileType.startsWith('image/')) {
+              const img = document.createElement('img');
+              img.src = data.content;
+              filePreview.appendChild(img);
+            } else if (data.fileType.startsWith('video/')) {
+              const video = document.createElement('video');
+              video.src = data.content;
+              video.controls = true;
+              filePreview.appendChild(video);
+            } else {
+              const link = document.createElement('a');
+              link.href = data.content;
+              link.textContent = `Download File (${data.fileType})`;
+              link.target = '_blank';
+              filePreview.appendChild(link);
+            }
+            
+            log(`File message: ${data.content} (${data.fileType})`);
+            document.getElementById('log').appendChild(filePreview);
+          }
         });
 
         socket.on("typing", (data) => {
@@ -157,6 +196,104 @@
           receiverPhone: receiverPhone,
           content: message,
         });
+      }
+
+      // Xử lý chọn file
+      document.getElementById('fileInput').addEventListener('change', function(e) {
+        selectedFiles = Array.from(e.target.files);
+        const preview = document.getElementById('filePreview');
+        preview.innerHTML = '';
+        
+        selectedFiles.forEach(file => {
+          if (file.type.startsWith('image/')) {
+            const img = document.createElement('img');
+            img.src = URL.createObjectURL(file);
+            preview.appendChild(img);
+          } else if (file.type.startsWith('video/')) {
+            const video = document.createElement('video');
+            video.src = URL.createObjectURL(file);
+            video.controls = true;
+            preview.appendChild(video);
+          } else {
+            const div = document.createElement('div');
+            div.textContent = `File: ${file.name} (${file.type})`;
+            preview.appendChild(div);
+          }
+        });
+      });
+
+      async function uploadAndSendMedia() {
+        if (!socket) {
+          alert("Please connect first");
+          return;
+        }
+
+        const receiverPhone = document.getElementById("receiverPhone").value;
+        if (!receiverPhone) {
+          alert("Please enter receiver phone");
+          return;
+        }
+
+        if (selectedFiles.length === 0) {
+          alert("Please select files to send");
+          return;
+        }
+
+        const token = document.getElementById("token").value;
+        const formData = new FormData();
+        selectedFiles.forEach(file => {
+          formData.append('files', file);
+        });
+
+        try {
+          // Upload file
+          const uploadResponse = await fetch('http://localhost:3000/api/chat/upload', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`
+            },
+            body: formData
+          });
+
+          const uploadResult = await uploadResponse.json();
+          
+          if (uploadResult.status === 'error') {
+            // Hiển thị lỗi chi tiết từ server
+            log(`Upload error: ${uploadResult.message}`);
+            return;
+          }
+
+          // Gửi tin nhắn media
+          uploadResult.data.urls.forEach((url, index) => {
+            socket.emit("send-message", {
+              receiverPhone: receiverPhone,
+              fileUrl: url,
+              fileType: selectedFiles[index].type
+            });
+          });
+
+          log(`Upload successful: ${JSON.stringify(uploadResult.data)}`);
+          
+          // Xóa preview sau khi gửi thành công
+          document.getElementById('filePreview').innerHTML = '';
+          document.getElementById('fileInput').value = '';
+          selectedFiles = [];
+        } catch (error) {
+          // Xử lý lỗi từ fetch
+          if (error.response) {
+            error.response.json().then(errorData => {
+              log(`Server error: ${errorData.message}`);
+              if (errorData.code) {
+                log(`Error code: ${errorData.code}`);
+              }
+              // Hiển thị alert với thông báo lỗi
+              // alert(errorData.message);
+            });
+          } else {
+            log(`Error uploading files: ${error.message}`);
+           // alert(error.message);
+          }
+        }
       }
 
       function startTyping() {

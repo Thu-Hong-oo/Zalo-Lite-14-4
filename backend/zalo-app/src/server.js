@@ -26,10 +26,15 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: "*",
+    origin: "*", // Cho phép tất cả các origin
     methods: ["GET", "POST"],
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
   },
+  transports: ["websocket", "polling"], // Hỗ trợ cả websocket và polling
+  allowEIO3: true, // Cho phép Engine.IO v3
+  pingTimeout: 60000, // Tăng thời gian timeout
+  pingInterval: 25000, // Tăng khoảng thời gian ping
 });
 
 // Configure logger
@@ -75,7 +80,7 @@ const upload = multer({
 // Middleware
 app.use(
   cors({
-    origin: "*", // Allow all origins
+    origin: "*", // Cho phép tất cả các origin
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
@@ -83,6 +88,7 @@ app.use(
       "Accept",
       "Content-Length",
       "X-Requested-With",
+      "Access-Control-Allow-Origin",
     ],
     exposedHeaders: ["Content-Length", "X-Requested-With"],
     credentials: true,
