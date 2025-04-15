@@ -100,10 +100,12 @@
 }
 
 .message {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 8px;
   max-width: 65%;
+  margin: 4px 0;
 }
 
 .message.sent {
@@ -122,10 +124,66 @@
   color: white;
 }
 
-.message-content p {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.4;
+.message-content.recalled {
+  background: #e4e6eb;
+  color: #65676b;
+  font-style: italic;
+}
+
+.message.sent .message-content.recalled {
+  background: #e4e6eb;
+  color: #65676b;
+}
+
+.message-actions {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.message.sent .message-actions {
+  left: -80px; /* Điều chỉnh vị trí cho tin nhắn gửi đi */
+}
+
+.message.received .message-actions {
+  right: -80px; /* Điều chỉnh vị trí cho tin nhắn nhận */
+}
+
+.message:hover .message-actions {
+  opacity: 1;
+}
+
+.action-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: white;
+  color: #65676b;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s;
+}
+
+.action-button:hover {
+  background: #f0f2f5;
+  transform: scale(1.1);
+}
+
+.action-button.more {
+  font-size: 16px;
+}
+
+.action-button.forward {
+  color: #0084ff;
 }
 
 .message-info {
