@@ -31,12 +31,10 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [socket, setSocket] = useState(null);
-  const [selectedVideo, setSelectedVideo] = useState(null);
-  const [showVideoPreview, setShowVideoPreview] = useState(false);
-  const [videoStatus, setVideoStatus] = useState({});
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [showFilePreview, setShowFilePreview] = useState(false);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [showImagePreview, setShowImagePreview] = useState(false);
   const flatListRef = useRef(null);
   const { title, otherParticipantPhone, avatar } = route.params;
 
@@ -56,7 +54,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const initializeSocket = async () => {
     try {
       const token = await getAccessToken();
-      const newSocket = io("http://192.168.2.118:3000", {
+      const newSocket = io("http://192.168.1.198:3000", {
         auth: {
           token,
         },
@@ -222,8 +220,13 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
       });
 
       if (!result.canceled) {
-        setSelectedVideo(result.assets[0].uri);
-        setShowVideoPreview(true);
+        const file = {
+          uri: result.assets[0].uri,
+          type: 'video/mp4',
+          name: 'video.mp4'
+        };
+        setSelectedFiles([file]);
+        setShowFilePreview(true);
       }
     } catch (error) {
       Alert.alert('Lỗi', 'Không thể chọn video');
@@ -278,9 +281,23 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
       
       if (result.status === 'success') {
         result.data.urls.forEach((url, index) => {
+          const newMessage = {
+            messageId: Date.now().toString(),
+            senderPhone: "me",
+            content: url,
+            type: 'file',
+            fileType: selectedFiles[index].type,
+            timestamp: Date.now(),
+            status: "sending"
+          };
+
+          setMessages((prev) => [...prev, newMessage]);
+          scrollToBottom();
+
           socket.emit("send-message", {
             receiverPhone: otherParticipantPhone,
-            fileUrl: url,
+            content: url,
+            type: 'file',
             fileType: selectedFiles[index].type
           });
         });
@@ -303,25 +320,17 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
         {item.type === 'text' ? (
           <Text style={styles.messageText}>{item.content}</Text>
         ) : item.type === 'file' ? (
-          <TouchableOpacity 
-            onPress={() => {
-              if (item.fileType.startsWith('image/')) {
-                setSelectedVideo(item.content);
-                setShowVideoPreview(true);
-              } else if (item.fileType.startsWith('video/')) {
-                setSelectedVideo(item.content);
-                setShowVideoPreview(true);
-              } else {
-                // Handle other file types
-                Alert.alert('File', 'Mở file');
-              }
-            }}
-          >
+          <TouchableOpacity onPress={() => {
+            if (item.fileType.startsWith('image/')) {
+              setPreviewImage(item.content);
+              setShowImagePreview(true);
+            }
+          }}>
             {item.fileType.startsWith('image/') ? (
               <Image 
                 source={{ uri: item.content }} 
                 style={styles.imgPreview}
-                resizeMode="cover"
+                resizeMode="contain"
               />
             ) : item.fileType.startsWith('video/') ? (
               <View style={styles.videoContainer}>
@@ -331,7 +340,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
                   resizeMode="contain"
                   useNativeControls
                   isLooping={true}
-                  shouldPlay={true}
+                  shouldPlay={false}
                 />
               </View>
             ) : (
@@ -342,9 +351,22 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
             )}
           </TouchableOpacity>
         ) : null}
-        <Text style={styles.messageTime}>
-          {new Date(item.timestamp).toLocaleTimeString()}
-        </Text>
+        <View style={styles.messageFooter}>
+          <Text style={styles.messageTime}>
+            {new Date(item.timestamp).toLocaleTimeString()}
+          </Text>
+          {isMyMessage && (
+            <Text style={styles.messageStatus}>
+              {item.status === "sending"
+                ? "Đang gửi..."
+                : item.status === "sent"
+                ? "✓"
+                : item.status === "error"
+                ? "✕"
+                : ""}
+            </Text>
+          )}
+        </View>
       </View>
     );
   };
@@ -408,8 +430,14 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
 
       {/* Message Input */}
       <View style={styles.inputContainer}>
-        <TouchableOpacity style={styles.attachButton}>
-          <Ionicons name="happy-outline" size={24} color="#666" />
+        <TouchableOpacity style={styles.attachButton} onPress={pickImage}>
+          <Ionicons name="image" size={24} color="#666" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.attachButton} onPress={pickVideo}>
+          <Ionicons name="videocam" size={24} color="#666" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.attachButton} onPress={pickDocument}>
+          <Ionicons name="document" size={24} color="#666" />
         </TouchableOpacity>
 
         <TextInput
@@ -434,6 +462,76 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
           />
         </TouchableOpacity>
       </View>
+
+      {/* File Preview Modal */}
+      <Modal
+        visible={showFilePreview}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowFilePreview(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            {selectedFiles.map((file, index) => (
+              <View key={index} style={styles.previewItem}>
+                {file.type.startsWith('image/') ? (
+                  <Image
+                    source={{ uri: file.uri }}
+                    style={styles.previewImage}
+                    resizeMode="contain"
+                  />
+                ) : file.type.startsWith('video/') ? (
+                  <Video
+                    source={{ uri: file.uri }}
+                    style={styles.previewVideo}
+                    resizeMode="contain"
+                    useNativeControls
+                    isLooping={true}
+                  />
+                ) : (
+                  <Text>{file.name}</Text>
+                )}
+              </View>
+            ))}
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setShowFilePreview(false)}
+              >
+                <Text style={styles.buttonText}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.sendButton]}
+                onPress={handleUpload}
+              >
+                <Text style={styles.buttonText}>Gửi</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Image Preview Modal */}
+      <Modal
+        visible={showImagePreview}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowImagePreview(false)}
+      >
+        <View style={styles.modalContainer}>
+          <TouchableOpacity 
+            style={styles.closeButton}
+            onPress={() => setShowImagePreview(false)}
+          >
+            <Ionicons name="close" size={30} color="white" />
+          </TouchableOpacity>
+          <Image
+            source={{ uri: previewImage }}
+            style={styles.fullscreenImage}
+            resizeMode="contain"
+          />
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -504,6 +602,7 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 10,
     marginVertical: 5,
+    overflow: 'hidden',
   },
   myMessage: {
     alignSelf: "flex-end",
@@ -542,10 +641,12 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#E5E5E5",
   },
-  imgPreview:{
-    width: 300,
-    height:300 ,
-    borderRadius: 5,
+  imgPreview: {
+    width: SCREEN_WIDTH * 0.8,
+    height: SCREEN_WIDTH * 0.5,
+    borderRadius: 10,
+    alignSelf: 'center',
+    backgroundColor: '#fff',
   },
   attachButton: {
     padding: 5,
@@ -589,17 +690,18 @@ const styles = StyleSheet.create({
     borderRadius: 5,
   },
   videoContainer: {
-    width: 300,
-    height: 400,
-    borderRadius: 5,
+    width: SCREEN_WIDTH * 0.8,
+    height: SCREEN_WIDTH * 1.2,
+    borderRadius: 10,
     position: "relative",
-    backgroundColor: '#1877f2',
-    padding:10,
+    backgroundColor: '#fff',
+    padding: 10,
+    alignSelf: 'center',
   },
   videoPreview: {
     width: "100%",
     height: "100%",
-    borderRadius: 5,
+    borderRadius: 10,
   },
   playButton: {
     position: "absolute",
@@ -621,6 +723,60 @@ const styles = StyleSheet.create({
     color: "#000",
     fontSize: 12,
     marginLeft: 5,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'black',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 1,
+    padding: 10,
+  },
+  fullscreenImage: {
+    width: '100%',
+    height: '100%',
+  },
+  modalContent: {
+    backgroundColor: "white",
+    borderRadius: 10,
+    padding: 20,
+    width: "90%",
+    maxHeight: "80%",
+  },
+  previewItem: {
+    marginBottom: 10,
+  },
+  previewImage: {
+    width: "100%",
+    height: 200,
+    borderRadius: 5,
+  },
+  previewVideo: {
+    width: "100%",
+    height: 300,
+    borderRadius: 5,
+  },
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 10,
+  },
+  modalButton: {
+    padding: 10,
+    borderRadius: 5,
+    marginLeft: 10,
+  },
+  cancelButton: {
+    backgroundColor: "#ccc",
+  },
+  buttonText: {
+    color: "white",
+    fontWeight: "bold",
   },
 });
 
