@@ -31,6 +31,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [socket, setSocket] = useState(null);
+  const [selectedMessage, setSelectedMessage] = useState(null);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [showFilePreview, setShowFilePreview] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
@@ -168,23 +169,58 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
 
       result.data.urls.forEach((url, index) => {
         const file = files[index];
-        socket.emit("send-message", {
-          receiverPhone: otherParticipantPhone,
-          fileUrl: url,
-          fileType: file.type,
-        });
-
+        const tempId = `temp-${Date.now()}-${index}`;
+        
+        // Thêm tin nhắn vào danh sách ngay lập tức
         const newMessage = {
-          messageId: Date.now().toString() + index,
+          messageId: tempId,
           senderPhone: "me",
           content: url,
           type: "file",
           fileType: file.type,
           timestamp: Date.now(),
           status: "sending",
+          isTempId: true,
         };
 
         setMessages((prev) => [...prev, newMessage]);
+
+        // Gửi tin nhắn qua socket
+        socket.emit("send-message", {
+          tempId,
+          receiverPhone: otherParticipantPhone,
+          fileUrl: url,
+          fileType: file.type,
+        });
+
+        // Lắng nghe phản hồi từ server
+        socket.once("message-sent", (response) => {
+          if (response && response.messageId) {
+            // Cập nhật messageId thật từ server
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.messageId === tempId
+                  ? {
+                      ...msg,
+                      messageId: response.messageId,
+                      isTempId: false,
+                      status: "sent",
+                    }
+                  : msg
+              )
+            );
+          }
+        });
+
+        // Lắng nghe lỗi
+        socket.once("error", (error) => {
+          console.error("Error sending file message:", error);
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.messageId === tempId ? { ...msg, status: "error" } : msg
+            )
+          );
+        });
       });
 
       setSelectedFiles([]);
@@ -265,7 +301,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   };
 
   const renderMessage = ({ item }) => {
-    const isMyMessage = item.senderPhone !== otherParticipantPhone;
+    const isMyMessage = item.senderPhone !== otherParticipantPhone || item.senderPhone === "me";
 
     const handleFilePress = async () => {
       if (item.fileType?.startsWith("image/")) {
@@ -287,7 +323,13 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     return (
       <View style={[styles.messageContainer, isMyMessage ? styles.myMessage : styles.otherMessage]}>
         {item.type === "text" ? (
-          <Text style={[styles.messageText, isMyMessage ? styles.myMessageText : styles.otherMessageText]}>
+          <Text
+            style={[
+              styles.messageText,
+              isMyMessage ? styles.myMessageText : styles.otherMessageText,
+              item.status === "recalled" && styles.recalledMessage,
+            ]}
+          >
             {item.content}
           </Text>
         ) : item.type === "file" ? (
@@ -304,9 +346,39 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
             )}
           </TouchableOpacity>
         ) : null}
-        <Text style={styles.messageTime}>{new Date(item.timestamp).toLocaleTimeString()}</Text>
+        <View style={styles.messageFooter}>
+          <Text style={[styles.messageTime, isMyMessage && styles.myMessageTime]}>
+            {new Date(item.timestamp).toLocaleTimeString()}
+          </Text>
+          {isMyMessage && (
+            <Text style={styles.messageStatus}>
+              {item.status === "sending"
+                ? "Đang gửi..."
+                : item.status === "sent"
+                ? "✓"
+                : item.status === "error"
+                ? "✕"
+                : item.status === "recalled"
+                ? "Đã thu hồi"
+                : ""}
+            </Text>
+          )}
+        </View>
       </View>
     );
+  };
+
+  const handleTyping = () => {
+    socket.emit("typing", { senderPhone: otherParticipantPhone });
+  };
+
+  const handleStopTyping = () => {
+    socket.emit("stop-typing", { senderPhone: otherParticipantPhone });
+  };
+
+  const handleEmojiPress = () => {
+    // TODO: Thêm logic hiển thị bàn phím emoji
+    Alert.alert("Thông báo", "Chức năng emoji sẽ được thêm sau");
   };
 
   return (
@@ -329,24 +401,66 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
         {isTyping && <Text style={styles.typingText}>Đang soạn tin nhắn...</Text>}
       </KeyboardAvoidingView>
       <View style={styles.inputContainer}>
-        <TouchableOpacity onPress={pickImage}>
+        <TouchableOpacity 
+          style={styles.attachButton}
+          onPress={handleEmojiPress}
+        >
+          <Ionicons name="happy-outline" size={24} color="#666" />
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={styles.attachButton}
+          onPress={() => {
+            Alert.alert(
+              "Chọn loại file",
+              "Bạn muốn gửi loại file nào?",
+              [
+                {
+                  text: "Ảnh",
+                  onPress: pickImage
+                },
+                {
+                  text: "Video",
+                  onPress: pickVideo
+                },
+                {
+                  text: "Hủy",
+                  style: "cancel"
+                }
+              ]
+            );
+          }}
+        >
           <Ionicons name="image" size={24} color="#666" />
         </TouchableOpacity>
-        <TouchableOpacity onPress={pickVideo}>
-          <Ionicons name="videocam" size={24} color="#666" />
+
+        <TouchableOpacity 
+          style={styles.attachButton}
+          onPress={pickDocument}
+        >
+          <Ionicons name="attach" size={24} color="#666" />
         </TouchableOpacity>
-        <TouchableOpacity onPress={pickDocument}>
-          <Ionicons name="document" size={24} color="#666" />
-        </TouchableOpacity>
+
         <TextInput
           style={styles.input}
           placeholder="Tin nhắn"
           value={message}
           onChangeText={setMessage}
+          onFocus={handleTyping}
+          onBlur={handleStopTyping}
           multiline
         />
-        <TouchableOpacity onPress={handleSendMessage}>
-          <Ionicons name="send" size={24} color={message.trim() || selectedFiles.length ? "#1877f2" : "#666"} />
+
+        <TouchableOpacity
+          style={styles.sendButton}
+          onPress={handleSendMessage}
+          disabled={!message.trim()}
+        >
+          <Ionicons
+            name="send"
+            size={24}
+            color="#666"
+          />
         </TouchableOpacity>
       </View>
       <Modal visible={showFilePreview} transparent={true} animationType="slide">
@@ -440,7 +554,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#ccc'
   },
   sendButton: {
-    backgroundColor: '#1877f2'
+    padding: 5,
+    marginLeft: 5,
+    backgroundColor: 'transparent'
   },
   buttonText: {
     color: 'white',
@@ -449,6 +565,26 @@ const styles = StyleSheet.create({
   previewImage: { width: "100%", height: 200, borderRadius: 5 },
   previewVideo: { width: "100%", height: 200, borderRadius: 5 },
   fullscreenImage: { width: "100%", height: "100%" },
+  attachButton: {
+    padding: 5,
+    marginRight: 5,
+  },
+  messageFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 5
+  },
+  myMessageTime: {
+    color: 'white'
+  },
+  messageStatus: {
+    color: '#666',
+    fontSize: 12
+  },
+  recalledMessage: {
+    textDecorationLine: 'line-through'
+  },
 });
 
 export default ChatDirectlyScreen;
