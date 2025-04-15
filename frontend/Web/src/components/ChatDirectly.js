@@ -307,24 +307,6 @@ const ChatDirectly = () => {
   useEffect(() => {
     if (!socket) return;
 
-    const handleMessageSent = (data) => {
-      if (!data || !data.messageId) return;
-
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.messageId === data.tempId || msg.messageId === data.messageId
-            ? {
-                ...msg,
-                messageId: data.messageId,
-                isTempId: false,
-                status: "sent",
-                timestamp: data.timestamp || Date.now(),
-              }
-            : msg
-        )
-      );
-    };
-
     const handleNewMessage = (msg) => {
       if (!msg || !msg.messageId) return;
 
@@ -356,7 +338,6 @@ const ChatDirectly = () => {
       );
     };
 
-    socket.on("message-sent", handleMessageSent);
     socket.on("new-message", handleNewMessage);
     socket.on("message-recalled", handleMessageRecalled);
     socket.on("message-deleted", ({ messageId }) => {
@@ -369,7 +350,6 @@ const ChatDirectly = () => {
     });
 
     return () => {
-      socket.off("message-sent", handleMessageSent);
       socket.off("new-message", handleNewMessage);
       socket.off("message-recalled", handleMessageRecalled);
       socket.off("message-deleted");
@@ -415,32 +395,38 @@ const ChatDirectly = () => {
 
     try {
       // Gửi tin nhắn qua socket và đợi phản hồi
-      socket.emit(
-        "send-message",
-        {
-          messageId: tempId,
-          receiverPhone: phone,
-          content: newMsg.content,
-        },
-        (response) => {
-          if (response && response.status === "success") {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.messageId === tempId
-                  ? {
-                      ...msg,
-                      messageId: response.messageId,
-                      isTempId: false,
-                      status: "sent",
-                    }
-                  : msg
-              )
-            );
-          } else {
-            throw new Error("Không thể gửi tin nhắn");
-          }
+      socket.emit("send-message", {
+        tempId,
+        receiverPhone: phone,
+        content: newMsg.content,
+      });
+
+      // Lắng nghe phản hồi từ server
+      socket.once("message-sent", (response) => {
+        if (response && response.messageId) {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.messageId === tempId
+                ? {
+                    ...msg,
+                    messageId: response.messageId,
+                    isTempId: false,
+                    status: "sent",
+                  }
+                : msg
+            )
+          );
         }
-      );
+      });
+
+      socket.once("error", (error) => {
+        console.error("Error sending message:", error);
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === tempId ? { ...msg, status: "error" } : msg
+          )
+        );
+      });
     } catch (err) {
       console.error("Error sending message:", err);
       setMessages((prev) => prev.filter((msg) => msg.messageId !== tempId));
