@@ -540,7 +540,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
         />
 
         <TouchableOpacity
-          style={styles.sendButton}
+          style={styles.sendIconButton}
           onPress={handleSendMessage}
           disabled={!message.trim()}
         >
@@ -810,7 +810,7 @@ const styles = StyleSheet.create({
   sendButton: {
     padding: 5,
     marginLeft: 5,
-    backgroundColor: 'transparent'
+    backgroundColor: '#1877f2'
   },
   buttonText: {
     color: 'white',
@@ -862,6 +862,10 @@ const styles = StyleSheet.create({
   messageStatus: {
     color: '#666',
     fontSize: 12
+  },
+  sendIconButton: {
+    padding: 5,
+    marginLeft: 5,
   },
 });
 
