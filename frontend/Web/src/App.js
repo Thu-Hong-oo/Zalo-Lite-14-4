@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 import "bootstrap/dist/css/bootstrap.min.css"
 import "./App.css"
+
 import { io } from "socket.io-client"
 import Login from "./components/Login"
 import ChatDirectly from "./components/ChatDirectly"
@@ -62,21 +63,17 @@ function MainApp({ setIsAuthenticated }) {
 
   const fetchConversations = async () => {
     try {
-      if (chats.length === 0) {
-        setLoading(true)
-      }
-      
-      const response = await api.get('/chat/conversations')
+      const response = await api.get('/chat/conversations');
       
       if (response.data.status === 'success' && response.data.data?.conversations) {
-        const transformedChats = await Promise.all(
+        const newChats = await Promise.all(
           response.data.data.conversations.map(async (conv) => {
             const otherParticipant = conv.participant.isCurrentUser
               ? conv.otherParticipant
-              : conv.participant
-
-            const userInfo = await fetchUserInfo(otherParticipant.phone)
-
+              : conv.participant;
+  
+            const userInfo = await fetchUserInfo(otherParticipant.phone);
+  
             return {
               id: conv.conversationId,
               title: userInfo?.name || otherParticipant.phone,
@@ -87,20 +84,26 @@ function MainApp({ setIsAuthenticated }) {
               unreadCount: conv.unreadCount || 0,
               otherParticipantPhone: otherParticipant.phone,
               senderName: conv.lastMessage.isFromMe ? 'Bạn' : (userInfo?.name || otherParticipant.phone)
-            }
+            };
           })
-        )
-
-        setChats(transformedChats)
-        setError(null)
+        );
+  
+        // 🔍 So sánh dữ liệu mới với dữ liệu cũ
+        const isEqual = JSON.stringify(newChats) === JSON.stringify(chats);
+        if (!isEqual) {
+          setChats(newChats);
+        }
+  
+        setError(null);
       }
     } catch (err) {
-      console.error("Error in fetchConversations:", err)
-      setError(err.message || "Failed to load conversations")
+      console.error("Error in fetchConversations:", err);
+      setError(err.message || "Failed to load conversations");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
+  
 
   // Initial fetch and user setup
   useEffect(() => {
@@ -119,38 +122,49 @@ function MainApp({ setIsAuthenticated }) {
   // Socket event handlers
   useEffect(() => {
     if (!socket) return;
-
+  
     const handleNewMessage = async (data) => {
       console.log("New message received:", data)
       await fetchConversations()
     }
-
+  
     const handleMessageRead = async (data) => {
       console.log("Message read status updated:", data)
       await fetchConversations()
     }
-
+  
     const handleNewConversation = async (data) => {
       console.log("New conversation created:", data)
       await fetchConversations()
     }
-
-    // Subscribe to events
+  
+    // Socket listeners
     socket.on("new_message", handleNewMessage)
     socket.on("message_read", handleMessageRead)
     socket.on("new_conversation", handleNewConversation)
-
-    // Polling as backup
-    const pollingInterval = setInterval(fetchConversations, 30000)
-
-    // Cleanup function
+  
+    // 🔄 Polling ẩn mỗi 3s để làm mới trong trường hợp socket miss
+    const pollingInterval = setInterval(() => {
+      fetchConversations()
+    }, 3000)
+  
+    // ✅ Dùng Page Visibility API để load lại khi user quay lại tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        fetchConversations()
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+  
     return () => {
       socket.off("new_message", handleNewMessage)
       socket.off("message_read", handleMessageRead)
       socket.off("new_conversation", handleNewConversation)
       clearInterval(pollingInterval)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
     }
-  }, [socket]) // Only re-run if socket changes
+  }, [socket])
+  
 
   const formatTime = (timestamp) => {
     const date = new Date(timestamp)

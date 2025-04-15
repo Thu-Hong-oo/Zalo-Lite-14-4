@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+// Optimized ChatDirectly component
+import React, { useState, useEffect, useRef, useContext, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import { getChatHistory, sendMessage } from '../services/chat';
+import EmojiPicker from 'emoji-picker-react';
 import { 
   ChevronLeft, Phone, Video, Search, Settings,
   Smile, Image, Link, UserPlus, Sticker, Type, Zap,
-  MoreHorizontal, ThumbsUp, Send
+  MoreHorizontal, ThumbsUp, Send, Image as ImageIcon, Paperclip
 } from 'lucide-react';
 import api from '../config/api';
 import './css/ChatDirectly.css';
@@ -18,35 +19,48 @@ const ChatDirectly = () => {
   const [userInfo, setUserInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
   const messagesEndRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const emojiPickerRef = useRef(null);
+  const attachMenuRef = useRef(null);
   const { phone } = useParams();
   const navigate = useNavigate();
 
-  // Fetch user info
+  // Close emoji picker when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target)) {
+        setShowEmojiPicker(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const fetchUserInfo = async () => {
     try {
       const response = await api.get(`/users/${phone}`);
-      if (response.data) {
-        setUserInfo(response.data);
-      }
-    } catch (error) {
-      console.error('Error fetching user info:', error);
+      if (response.data) setUserInfo(response.data);
+    } catch (err) {
+      console.error('User info error:', err);
       setError('Không thể tải thông tin người dùng');
     }
   };
 
-  // Load chat history
   const loadChatHistory = async () => {
     try {
       setLoading(true);
-      const response = await getChatHistory(phone);
-      console.log('Chat history response:', response);
-      if (response.status === 'success' && response.data.messages) {
-        setMessages(response.data.messages);
+      const res = await api.get(`/chat/history/${phone}`);
+      if (res.data.status === 'success') {
+        const sorted = res.data.data.messages.sort((a, b) => a.timestamp - b.timestamp);
+        setMessages(sorted);
         scrollToBottom();
       }
-    } catch (error) {
-      console.error('Error loading chat history:', error);
+    } catch (err) {
+      console.error('Chat history error:', err);
       setError('Không thể tải lịch sử chat');
     } finally {
       setLoading(false);
@@ -57,213 +71,201 @@ const ChatDirectly = () => {
     fetchUserInfo();
     initializeSocket();
     loadChatHistory();
-    return () => {
-      if (socket) {
-        socket.disconnect();
-      }
-    };
+    return () => socket?.disconnect();
   }, [phone]);
 
   const initializeSocket = () => {
-    try {
-      const token = localStorage.getItem('accessToken');
-      const newSocket = io('http://localhost:3000', {
-        auth: { token }
-      });
+    const token = localStorage.getItem('accessToken');
+    const newSocket = io('http://localhost:3000', { auth: { token } });
 
-      newSocket.on('connect', () => {
-        console.log('Connected to socket server');
-      });
-
-      newSocket.on('new-message', (message) => {
-        console.log('Received new message:', message);
-        setMessages(prev => [...prev, message]);
-        scrollToBottom();
-      });
-
-      newSocket.on('typing', ({ senderPhone }) => {
-        if (senderPhone === phone) {
-          setIsTyping(true);
-        }
-      });
-
-      newSocket.on('stop-typing', ({ senderPhone }) => {
-        if (senderPhone === phone) {
-          setIsTyping(false);
-        }
-      });
-
-      setSocket(newSocket);
-    } catch (error) {
-      console.error('Socket initialization error:', error);
-      setError('Lỗi kết nối socket');
-    }
+    newSocket.on('connect', () => console.log('Socket connected'));
+    newSocket.on('typing', ({ senderPhone }) => {
+      if (senderPhone === phone) {
+        setIsTyping(true);
+        setTimeout(() => setIsTyping(false), 3000);
+      }
+    });
+    newSocket.on('stop_typing', ({ senderPhone }) => {
+      if (senderPhone === phone) setIsTyping(false);
+    });
+    setSocket(newSocket);
   };
+
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('message-sent', (data) => {
+      setMessages(prev => prev.map(msg =>
+        msg.messageId === data.messageId ? { ...msg, status: 'delivered', timestamp: Date.now() } : msg
+      ));
+    });
+    socket.on('new-message', (msg) => {
+      setMessages(prev => prev.some(m => m.messageId === msg.messageId) ? prev : [...prev, msg]);
+    });
+    return () => {
+      socket.off('message-sent');
+      socket.off('new-message');
+    };
+  }, [socket]);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = messagesEndRef.current;
+    if (!el) return;
+    const container = el.parentElement;
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+    if (isNearBottom) el.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const handleSendMessage = async (e) => {
+  const handleSendMessage = (e) => {
     e.preventDefault();
     if (!message.trim() || !socket) return;
-
+    const currentUserPhone = localStorage.getItem('phone');
+    const tempId = Date.now().toString();
+    const newMsg = {
+      messageId: tempId,
+      senderPhone: currentUserPhone,
+      receiverPhone: phone,
+      content: message.trim(),
+      timestamp: Date.now(),
+      status: 'sending'
+    };
+    setMessage('');
+    setMessages(prev => [...prev, newMsg]);
+    scrollToBottom();
     try {
-      const response = await sendMessage(phone, message);
-      if (response.status === 'success') {
-        setMessage('');
-        socket.emit('stop-typing', { receiverPhone: phone });
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
+      socket.emit('send-message', {
+        messageId: tempId,
+        receiverPhone: phone,
+        content: newMsg.content
+      });
+    } catch (err) {
+      setMessages(prev => prev.filter(msg => msg.messageId !== tempId));
     }
   };
 
   const handleTyping = () => {
-    if (socket) {
-      socket.emit('typing', { receiverPhone: phone });
-    }
+    if (!socket || typingTimeoutRef.current) return;
+    socket.emit('typing', { receiverPhone: phone });
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit('stop_typing', { receiverPhone: phone });
+      typingTimeoutRef.current = null;
+    }, 1000);
   };
 
-  const handleStopTyping = () => {
-    if (socket) {
-      socket.emit('stop-typing', { receiverPhone: phone });
-    }
+  const onEmojiClick = (emojiObject) => {
+    const cursor = document.querySelector('.message-input').selectionStart;
+    const text = message.slice(0, cursor) + emojiObject.emoji + message.slice(cursor);
+    setMessage(text);
+    setShowEmojiPicker(false);
   };
 
-  if (loading) {
-    return <div className="loading">Đang tải...</div>;
-  }
+  const handleAttachClick = () => {
+    setShowAttachMenu(!showAttachMenu);
+  };
 
-  if (error) {
-    return <div className="error">{error}</div>;
-  }
+  const renderedMessages = useMemo(() => messages.map((msg, idx) => {
+    const isOther = msg.senderPhone !== localStorage.getItem('phone');
+    return (
+      <div key={msg.messageId || idx} className={`message ${isOther ? 'received' : 'sent'}`}>
+        <div className="message-content">
+          <p>{msg.content}</p>
+          <div className="message-info">
+            <span className="message-time">{new Date(msg.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
+            {!isOther && msg.status === 'sending' && <span className="loading-dot"><span>.</span><span>.</span><span>.</span></span>}
+            {!isOther && msg.status === 'delivered' && <span className="message-status">Đã nhận</span>}
+          </div>
+        </div>
+      </div>
+    );
+  }), [messages]);
+
+  if (loading) return <div className="loading">Đang tải...</div>;
+  if (error) return <div className="error">{error}</div>;
 
   return (
     <div className="chat-directly">
-      {/* Header */}
       <div className="chat-header">
         <div className="header-left">
-          <button className="back-button" onClick={() => navigate(-1)}>
-            <ChevronLeft size={24} />
-          </button>
+          <button onClick={() => navigate(-1)}><ChevronLeft size={24} /></button>
           <div className="user-info">
-            <div className="avatar-container">
-              <img
-                src={userInfo?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(phone)}&background=random`}
-                alt={userInfo?.name || phone}
-                className="avatar"
-              />
-            </div>
-            <div className="user-details">
-              <span className="username">{userInfo?.name || phone}</span>
+            {userInfo?.avatar ? <img src={userInfo.avatar} alt="avatar" className="avatar" /> : <div className="avatar-placeholder">{userInfo?.name?.slice(0, 2) || phone.slice(0, 2)}</div>}
+            <div>
+              <h3>{userInfo?.name || phone}</h3>
+              {isTyping && <p>Đang soạn tin nhắn...</p>}
             </div>
           </div>
         </div>
         <div className="header-actions">
-          <button className="action-button">
-            <UserPlus size={20} />
-          </button>
-          <button className="action-button">
-            <Video size={20} />
-          </button>
-          <button className="action-button">
-            <Phone size={20} />
-          </button>
-          <button className="action-button">
-            <Search size={20} />
-          </button>
-          <button className="action-button">
-            <Settings size={20} />
-          </button>
+          {[Search, Phone, Video, UserPlus, Settings].map((Icon, i) => <button key={i}><Icon size={20} /></button>)}
         </div>
       </div>
 
-      {/* Messages */}
       <div className="messages-container">
-        <div className="messages-list">
-          {messages.map((msg, index) => (
-            <div
-              key={index}
-              className={`message-wrapper ${msg.senderPhone === phone ? 'other' : 'self'}`}
-            >
-              {msg.senderPhone === phone && (
-                <div className="avatar-container small">
-                  <img
-                    src={userInfo?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(phone)}&background=random`}
-                    alt={userInfo?.name || phone}
-                    className="avatar"
+        <div className="messages-list">{renderedMessages}<div ref={messagesEndRef} /></div>
+      </div>
+
+      <div className="chat-input-area">
+        <div className="input-toolbar">
+          <div className="toolbar-left">
+            <div className="emoji-wrapper" ref={emojiPickerRef}>
+              <button 
+                type="button" 
+                className="toolbar-button"
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              >
+                <Smile size={20} />
+              </button>
+              {showEmojiPicker && (
+                <div className="emoji-picker-container">
+                  <EmojiPicker
+                    onEmojiClick={onEmojiClick}
+                    width={300}
+                    height={400}
                   />
                 </div>
               )}
-              <div className="message-bubble">
-                <div className="message-content">
-                  <p>{msg.content}</p>
-                </div>
-                <span className="message-time">
-                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
             </div>
-          ))}
-          {isTyping && (
-            <div className="typing-indicator">
-              Đang soạn tin nhắn...
+            <button type="button" className="toolbar-button">
+              <ImageIcon size={20} />
+            </button>
+            <div className="attach-wrapper" ref={attachMenuRef}>
+              <button 
+                type="button" 
+                className="toolbar-button"
+                onClick={handleAttachClick}
+              >
+                <Paperclip size={20} />
+              </button>
             </div>
-          )}
-          <div ref={messagesEndRef} />
+            <button type="button" className="toolbar-button">
+              <Type size={20} />
+            </button>
+            <button type="button" className="toolbar-button">
+              <Sticker size={20} />
+            </button>
+            <button type="button" className="toolbar-button">
+              <Zap size={20} />
+            </button>
+            <button type="button" className="toolbar-button">
+              <MoreHorizontal size={20} />
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Input Area */}
-      <div className="chat-input-area">
-        <div className="input-actions">
-          <button className="input-action-button">
-            <Smile size={20} />
-          </button>
-          <button className="input-action-button">
-            <Image size={20} />
-          </button>
-          <button className="input-action-button">
-            <Link size={20} />
-          </button>
-          <button className="input-action-button">
-            <UserPlus size={20} />
-          </button>
-          <button className="input-action-button">
-            <Sticker size={20} />
-          </button>
-          <button className="input-action-button">
-            <Type size={20} />
-          </button>
-          <button className="input-action-button">
-            <Zap size={20} />
-          </button>
-          <button className="input-action-button">
-            <MoreHorizontal size={20} />
-          </button>
-        </div>
         <form onSubmit={handleSendMessage} className="input-form">
           <input
-            type="text"
             value={message}
-            onChange={(e) => {
-              setMessage(e.target.value);
-              handleTyping();
-            }}
-            onBlur={handleStopTyping}
+            onChange={(e) => { setMessage(e.target.value); handleTyping(); }}
+            onBlur={() => socket?.emit('stop_typing', { receiverPhone: phone })}
             placeholder={`Nhập @, tin nhắn tới ${userInfo?.name || phone}`}
             className="message-input"
           />
           <div className="input-buttons">
-            <button type="button" className="emoji-button">
-              <Smile size={20} />
-            </button>
-            <button type="button" className="thumbs-up-button">
-              <ThumbsUp size={20} />
-            </button>
-            <button type="submit" className="send-button" disabled={!message.trim()}>
-              <Send size={20} />
+            <button 
+              type="submit" 
+              className="send-button"
+              disabled={!message.trim()}
+            >
+              <Send size={20} color={message.trim() ? "#1877f2" : "#666"} />
             </button>
           </div>
         </form>
