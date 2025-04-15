@@ -104,11 +104,6 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
 
     try {
       if (message.trim()) {
-        socket.emit("send-message", {
-          receiverPhone: otherParticipantPhone,
-          content: message.trim(),
-        });
-
         const newMessage = {
           messageId: Date.now().toString(),
           senderPhone: "me",
@@ -121,6 +116,38 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
         setMessages((prev) => [...prev, newMessage]);
         setMessage("");
         scrollToBottom();
+
+        socket.emit("send-message", {
+          receiverPhone: otherParticipantPhone,
+          content: message.trim(),
+        });
+
+        // Lắng nghe phản hồi từ server
+        socket.once("message-sent", (response) => {
+          if (response && response.messageId) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.messageId === newMessage.messageId
+                  ? {
+                      ...msg,
+                      messageId: response.messageId,
+                      status: "sent",
+                    }
+                  : msg
+              )
+            );
+          }
+        });
+
+        // Lắng nghe lỗi
+        socket.once("error", (error) => {
+          console.error("Error sending message:", error);
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.messageId === newMessage.messageId ? { ...msg, status: "error" } : msg
+            )
+          );
+        });
       }
 
       if (selectedFiles.length > 0) {
