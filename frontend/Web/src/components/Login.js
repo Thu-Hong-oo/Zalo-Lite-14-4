@@ -66,6 +66,8 @@ export default function Login({ setIsAuthenticated }) {
           // Lưu thông tin user profile đầy đủ
           if (profileResponse.data) {
             localStorage.setItem("user", JSON.stringify(profileResponse.data))
+            // Lưu số điện thoại riêng để dễ truy cập
+            localStorage.setItem("phone", formattedPhone)
             // Cập nhật trạng thái xác thực
             setIsAuthenticated(true)
             // Chuyển hướng đến trang chính

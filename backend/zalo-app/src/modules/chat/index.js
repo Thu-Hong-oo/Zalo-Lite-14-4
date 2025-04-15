@@ -5,8 +5,6 @@ const { DynamoDB } = require("aws-sdk");
 const dynamoDB = new DynamoDB.DocumentClient();
 const { v4: uuidv4 } = require("uuid");
 const jwt = require("jsonwebtoken");
-const multer = require("multer");
-const { uploadToS3 } = require("../media/services");
 
 // Map để lưu trữ các kết nối socket theo số điện thoại
 const connectedUsers = new Map();
@@ -15,11 +13,6 @@ const connectedUsers = new Map();
 const createParticipantId = (phone1, phone2) => {
   return [phone1, phone2].sort().join("_");
 };
-
-// Configure multer for file upload
-const upload = multer({
-    storage: multer.memoryStorage(),
-});
 
 // Controller functions
 const getConversations = async (req, res) => {
@@ -333,17 +326,17 @@ const initializeSocket = (io) => {
       socket.on("send-message", async (data) => {
         try {
           console.log("Received send-message event:", data);
-          const { receiverPhone, content, fileUrl, fileType } = data;
+          const { receiverPhone, content } = data;
 
-          if (!receiverPhone || (!content && !fileUrl)) {
-            console.log("Missing receiverPhone or content/fileUrl");
+          if (!receiverPhone || !content) {
+            console.log("Missing receiverPhone or content");
             socket.emit("error", {
               message: "Thiếu thông tin người nhận hoặc nội dung tin nhắn",
             });
             return;
           }
 
-          if (content && content.length > 200) {
+          if (content.length > 200) {
             console.log("Message too long");
             socket.emit("error", { message: "Tin nhắn quá dài" });
             return;
@@ -355,15 +348,6 @@ const initializeSocket = (io) => {
           const conversationId = createParticipantId(userPhone, receiverPhone);
           console.log("Created conversationId:", conversationId);
 
-          // Prepare message content based on type
-          let messageContent = content;
-          let messageType = "text";
-          
-          if (fileUrl) {
-            messageContent = fileUrl;
-            messageType = "file";
-          }
-
           const messageParams = {
             TableName: process.env.MESSAGE_TABLE,
             Item: {
@@ -371,21 +355,20 @@ const initializeSocket = (io) => {
               conversationId,
               senderPhone: userPhone,
               receiverPhone,
-              content: messageContent,
+              content,
               timestamp,
               status: "sent",
-              type: messageType,
-              fileType: fileType || null
+              type: "text",
             },
           };
 
-          console.log("Saving message:", JSON.stringify(messageParams, null, 2));
+          console.log("Saving message:", messageParams);
           await dynamoDB.put(messageParams).promise();
           console.log("Message saved successfully");
 
           console.log("Updating conversation...");
           await upsertConversation(userPhone, receiverPhone, {
-            content: fileUrl ? `[File] ${fileType || 'file'}` : content,
+            content,
             timestamp,
             senderId: userPhone,
           });
@@ -398,11 +381,9 @@ const initializeSocket = (io) => {
               messageId,
               conversationId,
               senderPhone: userPhone,
-              content: messageContent,
+              content,
               timestamp,
               status: "delivered",
-              type: messageType,
-              fileType: fileType || null
             });
           }
 
@@ -414,10 +395,7 @@ const initializeSocket = (io) => {
         } catch (error) {
           console.error("Error in send-message:", error);
           console.error("Stack trace:", error.stack);
-          socket.emit("error", { 
-            message: "Lỗi khi gửi tin nhắn",
-            code: error.code || "UNKNOWN_ERROR"
-          });
+          socket.emit("error", { message: "Lỗi khi gửi tin nhắn" });
         }
       });
 
@@ -474,58 +452,261 @@ const initializeSocket = (io) => {
   });
 };
 
-// Route to handle file uploads
-router.post("/upload", authMiddleware, upload.array("files"), async (req, res) => {
-    try {
-        if (!req.files || req.files.length === 0) {
-            return res.status(400).json({
-                status: "error",
-                message: "Không có file nào được tải lên",
-                code: "NO_FILES"
-            });
-        }
+// Recall message handler
+const recallMessage = async (req, res) => {
+  try {
+    const { messageId, receiverPhone } = req.body;
+    const senderPhone = req.user.phone;
+    
+    // Tạo conversationId
+    const conversationId = createParticipantId(senderPhone, receiverPhone);
 
-        const results = await uploadToS3(req.files);
-        const urls = results.map(result => result.Location);
-        
-        res.json({
-            status: "success",
-            data: {
-                urls,
-                files: req.files.map(file => ({
-                    originalname: file.originalname,
-                    mimetype: file.mimetype,
-                    size: file.size
-                }))
-            }
-        });
-    } catch (error) {
-        console.error("Upload error:", error);
-        
-        // Nếu là lỗi validation
-        if (error.isValid === false) {
-            return res.status(400).json({
-                status: "error",
-                message: error.message,
-                code: error.code
-            });
-        }
-        
-        // Nếu là lỗi server khác
-        res.status(500).json({
-            status: "error",
-            message: "Đã xảy ra lỗi server",
-            code: "SERVER_ERROR"
-        });
+    // Kiểm tra tin nhắn tồn tại bằng query
+    const queryParams = {
+      TableName: process.env.MESSAGE_TABLE,
+      IndexName: "conversationIndex",
+      KeyConditionExpression: "conversationId = :conversationId",
+      FilterExpression: "messageId = :messageId",
+      ExpressionAttributeValues: {
+        ":conversationId": conversationId,
+        ":messageId": messageId
+      }
+    };
+
+    const messages = await dynamoDB.query(queryParams).promise();
+    
+    if (!messages.Items || messages.Items.length === 0) {
+      return res.status(404).json({
+        status: "error",
+        message: "Không tìm thấy tin nhắn"
+      });
     }
-});
+
+    const message = messages.Items[0];
+
+    // Kiểm tra người thu hồi có phải người gửi không
+    if (message.senderPhone !== senderPhone) {
+      return res.status(403).json({
+        status: "error",
+        message: "Bạn không có quyền thu hồi tin nhắn này"
+      });
+    }
+
+    // Cập nhật trạng thái tin nhắn với key structure đúng
+    const updateParams = {
+      TableName: process.env.MESSAGE_TABLE,
+      Key: {
+        messageId: messageId,
+        timestamp: message.timestamp // Sử dụng timestamp từ tin nhắn gốc
+      },
+      UpdateExpression: "set #status = :status, content = :content",
+      ExpressionAttributeNames: {
+        "#status": "status"
+      },
+      ExpressionAttributeValues: {
+        ":status": "recalled",
+        ":content": "Tin nhắn đã bị thu hồi"
+      },
+      ReturnValues: "ALL_NEW"
+    };
+
+    const result = await dynamoDB.update(updateParams).promise();
+
+    // Cập nhật conversation với tin nhắn mới
+    await upsertConversation(senderPhone, receiverPhone, {
+      content: "Tin nhắn đã bị thu hồi",
+      timestamp: Date.now(),
+      senderId: senderPhone
+    });
+
+    // Gửi sự kiện thu hồi tin nhắn qua socket
+    const receiverSocket = connectedUsers.get(receiverPhone);
+    if (receiverSocket) {
+      receiverSocket.emit('message-recalled', {
+        messageId,
+        conversationId,
+        content: "Tin nhắn đã bị thu hồi"
+      });
+    }
+
+    res.json({
+      status: "success",
+      message: "Đã thu hồi tin nhắn thành công",
+      data: result.Attributes
+    });
+
+  } catch (error) {
+    console.error("Error recalling message:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Đã xảy ra lỗi khi thu hồi tin nhắn",
+      error: error.message
+    });
+  }
+};
+
+const deleteMessage = async (req, res) => {
+  try {
+    const { messageId } = req.body;  // Lấy messageId từ body thay vì params
+    const userPhone = req.user.phone;
+
+    // Đầu tiên tìm tin nhắn để lấy timestamp
+    const queryParams = {
+      TableName: process.env.MESSAGE_TABLE,
+      IndexName: "conversationIndex",
+      FilterExpression: "messageId = :messageId",
+      ExpressionAttributeValues: {
+        ":messageId": messageId
+      }
+    };
+
+    const messages = await dynamoDB.scan(queryParams).promise();
+    
+    if (!messages.Items || messages.Items.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Không tìm thấy tin nhắn'
+      });
+    }
+
+    const message = messages.Items[0];
+
+    // Kiểm tra quyền xóa
+    if (message.senderPhone !== userPhone) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Không có quyền xóa tin nhắn này'
+      });
+    }
+
+    // Xóa tin nhắn (soft delete) với key structure đúng
+    const updateParams = {
+      TableName: process.env.MESSAGE_TABLE,
+      Key: {
+        messageId: messageId,
+        timestamp: message.timestamp
+      },
+      UpdateExpression: 'SET #status = :status',
+      ExpressionAttributeNames: {
+        '#status': 'status'
+      },
+      ExpressionAttributeValues: {
+        ':status': 'deleted'
+      }
+    };
+
+    await dynamoDB.update(updateParams).promise();
+
+    // Emit socket event nếu cần
+    const receiverSocket = connectedUsers.get(message.receiverPhone);
+    if (receiverSocket) {
+      receiverSocket.emit('message-deleted', {
+        messageId,
+        conversationId: message.conversationId
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Đã xóa tin nhắn'
+    });
+  } catch (error) {
+    console.error('Error deleting message:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Lỗi khi xóa tin nhắn'
+    });
+  }
+};
+
+const forwardMessage = async (req, res) => {
+  try {
+    const { messageId, receiverPhone, content } = req.body;
+    const senderPhone = req.user.phone;
+
+    // Tìm tin nhắn gốc bằng scan với index
+    const queryParams = {
+      TableName: process.env.MESSAGE_TABLE,
+      IndexName: "conversationIndex",
+      FilterExpression: "messageId = :messageId",
+      ExpressionAttributeValues: {
+        ":messageId": messageId
+      }
+    };
+
+    const messages = await dynamoDB.scan(queryParams).promise();
+    
+    if (!messages.Items || messages.Items.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Không tìm thấy tin nhắn gốc'
+      });
+    }
+
+    const originalMessage = messages.Items[0];
+
+    // Tạo tin nhắn mới
+    const newMessageId = uuidv4();
+    const conversationId = createParticipantId(senderPhone, receiverPhone);
+    const timestamp = Date.now();
+
+    const newMessage = {
+      messageId: newMessageId,
+      timestamp: timestamp, // Thêm timestamp vào key
+      conversationId,
+      content: content || originalMessage.content, // Sử dụng content từ request hoặc tin nhắn gốc
+      senderPhone,
+      receiverPhone,
+      status: 'sent',
+      type: 'forwarded',
+      originalMessageId: messageId
+    };
+
+    // Lưu tin nhắn mới
+    await dynamoDB.put({
+      TableName: process.env.MESSAGE_TABLE,
+      Item: newMessage
+    }).promise();
+
+    // Cập nhật conversation
+    await upsertConversation(senderPhone, receiverPhone, {
+      content: newMessage.content,
+      senderId: senderPhone,
+      timestamp
+    });
+
+    // Gửi thông báo qua socket cho người nhận
+    const receiverSocket = connectedUsers.get(receiverPhone);
+    if (receiverSocket) {
+      receiverSocket.emit('new-message', newMessage);
+    }
+
+    res.json({
+      status: 'success',
+      data: {
+        message: newMessage
+      }
+    });
+  } catch (error) {
+    console.error('Error forwarding message:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Lỗi khi chuyển tiếp tin nhắn',
+      error: error.message
+    });
+  }
+};
 
 // Đăng ký routes
 router.get("/conversations", authMiddleware, getConversations);
 router.get("/history/:phone", authMiddleware, getChatHistory);
+router.put("/messages/recall", authMiddleware, recallMessage);
+router.delete('/messages/delete', authMiddleware, deleteMessage);
+router.post('/messages/forward', authMiddleware, forwardMessage);
 
 // Export
 module.exports = {
   routes: router,
   socket: initializeSocket,
+  connectedUsers,
 };
