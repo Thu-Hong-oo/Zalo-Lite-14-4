@@ -12,9 +12,14 @@ const dynamoDB = new AWS.DynamoDB.DocumentClient();
 
 // Create S3 client
 const s3 = new AWS.S3();
+const BUCKETS = {
+  MEDIA: 'media-zalolite',
+  USERS: 'users-zalolite'
+};
 
 module.exports = {
   dynamoDB,
   s3,
-  AWS
+  AWS,
+  BUCKETS
 }; 

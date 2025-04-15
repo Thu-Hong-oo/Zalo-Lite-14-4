@@ -5,6 +5,8 @@ const { DynamoDB } = require("aws-sdk");
 const dynamoDB = new DynamoDB.DocumentClient();
 const { v4: uuidv4 } = require("uuid");
 const jwt = require("jsonwebtoken");
+const multer = require("multer");
+const { uploadToS3 } = require("../media/services");
 
 // Map để lưu trữ các kết nối socket theo số điện thoại
 const connectedUsers = new Map();
@@ -13,6 +15,11 @@ const connectedUsers = new Map();
 const createParticipantId = (phone1, phone2) => {
   return [phone1, phone2].sort().join("_");
 };
+
+// Configure multer for file upload
+const upload = multer({
+    storage: multer.memoryStorage(),
+});
 
 // Controller functions
 const getConversations = async (req, res) => {
@@ -326,17 +333,17 @@ const initializeSocket = (io) => {
       socket.on("send-message", async (data) => {
         try {
           console.log("Received send-message event:", data);
-          const { receiverPhone, content } = data;
+          const { receiverPhone, content, fileUrl, fileType } = data;
 
-          if (!receiverPhone || !content) {
-            console.log("Missing receiverPhone or content");
+          if (!receiverPhone || (!content && !fileUrl)) {
+            console.log("Missing receiverPhone or content/fileUrl");
             socket.emit("error", {
               message: "Thiếu thông tin người nhận hoặc nội dung tin nhắn",
             });
             return;
           }
 
-          if (content.length > 200) {
+          if (content && content.length > 200) {
             console.log("Message too long");
             socket.emit("error", { message: "Tin nhắn quá dài" });
             return;
@@ -348,6 +355,15 @@ const initializeSocket = (io) => {
           const conversationId = createParticipantId(userPhone, receiverPhone);
           console.log("Created conversationId:", conversationId);
 
+          // Prepare message content based on type
+          let messageContent = content;
+          let messageType = "text";
+          
+          if (fileUrl) {
+            messageContent = fileUrl;
+            messageType = "file";
+          }
+
           const messageParams = {
             TableName: process.env.MESSAGE_TABLE,
             Item: {
@@ -355,20 +371,21 @@ const initializeSocket = (io) => {
               conversationId,
               senderPhone: userPhone,
               receiverPhone,
-              content,
+              content: messageContent,
               timestamp,
               status: "sent",
-              type: "text",
+              type: messageType,
+              fileType: fileType || null
             },
           };
 
-          console.log("Saving message:", messageParams);
+          console.log("Saving message:", JSON.stringify(messageParams, null, 2));
           await dynamoDB.put(messageParams).promise();
           console.log("Message saved successfully");
 
           console.log("Updating conversation...");
           await upsertConversation(userPhone, receiverPhone, {
-            content,
+            content: fileUrl ? `[File] ${fileType || 'file'}` : content,
             timestamp,
             senderId: userPhone,
           });
@@ -381,9 +398,11 @@ const initializeSocket = (io) => {
               messageId,
               conversationId,
               senderPhone: userPhone,
-              content,
+              content: messageContent,
               timestamp,
               status: "delivered",
+              type: messageType,
+              fileType: fileType || null
             });
           }
 
@@ -395,7 +414,10 @@ const initializeSocket = (io) => {
         } catch (error) {
           console.error("Error in send-message:", error);
           console.error("Stack trace:", error.stack);
-          socket.emit("error", { message: "Lỗi khi gửi tin nhắn" });
+          socket.emit("error", { 
+            message: "Lỗi khi gửi tin nhắn",
+            code: error.code || "UNKNOWN_ERROR"
+          });
         }
       });
 
@@ -451,6 +473,52 @@ const initializeSocket = (io) => {
     }
   });
 };
+
+// Route to handle file uploads
+router.post("/upload", authMiddleware, upload.array("files"), async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({
+                status: "error",
+                message: "Không có file nào được tải lên",
+                code: "NO_FILES"
+            });
+        }
+
+        const results = await uploadToS3(req.files);
+        const urls = results.map(result => result.Location);
+        
+        res.json({
+            status: "success",
+            data: {
+                urls,
+                files: req.files.map(file => ({
+                    originalname: file.originalname,
+                    mimetype: file.mimetype,
+                    size: file.size
+                }))
+            }
+        });
+    } catch (error) {
+        console.error("Upload error:", error);
+        
+        // Nếu là lỗi validation
+        if (error.isValid === false) {
+            return res.status(400).json({
+                status: "error",
+                message: error.message,
+                code: error.code
+            });
+        }
+        
+        // Nếu là lỗi server khác
+        res.status(500).json({
+            status: "error",
+            message: "Đã xảy ra lỗi server",
+            code: "SERVER_ERROR"
+        });
+    }
+});
 
 // Đăng ký routes
 router.get("/conversations", authMiddleware, getConversations);
