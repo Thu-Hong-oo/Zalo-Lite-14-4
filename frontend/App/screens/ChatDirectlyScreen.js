@@ -23,6 +23,8 @@ import { getAccessToken } from "../services/storage";
 import * as ImagePicker from "expo-image-picker";
 import { Video } from "expo-av";
 import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -38,6 +40,8 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [previewVideo, setPreviewVideo] = useState(null);
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
   const flatListRef = useRef(null);
   const { title, otherParticipantPhone, avatar } = route.params;
 
@@ -308,7 +312,8 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
         setPreviewImage(item.content);
         setShowImagePreview(true);
       } else if (item.fileType?.startsWith("video/")) {
-        // Handle video
+        setPreviewVideo(item.content);
+        setShowVideoPreview(true);
       } else {
         try {
           const supported = await Linking.canOpenURL(item.content);
@@ -379,6 +384,36 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const handleEmojiPress = () => {
     // TODO: Thêm logic hiển thị bàn phím emoji
     Alert.alert("Thông báo", "Chức năng emoji sẽ được thêm sau");
+  };
+
+  const downloadFile = async (url) => {
+    try {
+      // Yêu cầu quyền truy cập thư viện
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Lỗi', 'Cần quyền truy cập thư viện để tải file');
+        return;
+      }
+
+      // Tạo thư mục tạm để lưu file
+      const fileUri = FileSystem.documentDirectory + url.split('/').pop();
+      
+      // Tải file về
+      const downloadResult = await FileSystem.downloadAsync(url, fileUri);
+      
+      if (downloadResult.status === 200) {
+        // Lưu vào thư viện
+        const asset = await MediaLibrary.createAssetAsync(downloadResult.uri);
+        await MediaLibrary.createAlbumAsync('Zalo Lite', asset, false);
+        
+        Alert.alert('Thành công', 'File đã được tải xuống thư viện');
+      } else {
+        Alert.alert('Lỗi', 'Không thể tải file');
+      }
+    } catch (error) {
+      console.error("Error downloading file:", error);
+      Alert.alert("Lỗi", "Không thể tải file");
+    }
   };
 
   return (
@@ -490,12 +525,60 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
           </View>
         </View>
       </Modal>
-      <Modal visible={showImagePreview} transparent={true} animationType="fade">
+      <Modal 
+        visible={showImagePreview} 
+        transparent={true} 
+        animationType="fade"
+      >
         <View style={styles.modalContainer}>
-          <TouchableOpacity onPress={() => setShowImagePreview(false)}>
-            <Ionicons name="close" size={30} color="white" />
-          </TouchableOpacity>
-          <Image source={{ uri: previewImage }} style={styles.fullscreenImage} resizeMode="contain" />
+          <View style={styles.modalHeader}>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setShowImagePreview(false)}
+            >
+              <Ionicons name="close" size={30} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.downloadButton}
+              onPress={() => downloadFile(previewImage)}
+            >
+              <Ionicons name="download" size={30} color="white" />
+            </TouchableOpacity>
+          </View>
+          <Image 
+            source={{ uri: previewImage }} 
+            style={styles.fullscreenImage} 
+            resizeMode="contain" 
+          />
+        </View>
+      </Modal>
+      <Modal 
+        visible={showVideoPreview} 
+        transparent={true} 
+        animationType="fade"
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setShowVideoPreview(false)}
+            >
+              <Ionicons name="close" size={30} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.downloadButton}
+              onPress={() => downloadFile(previewVideo)}
+            >
+              <Ionicons name="download" size={30} color="white" />
+            </TouchableOpacity>
+          </View>
+          <Video
+            source={{ uri: previewVideo }}
+            style={styles.fullscreenVideo}
+            resizeMode="contain"
+            useNativeControls
+            shouldPlay
+          />
         </View>
       </Modal>
     </SafeAreaView>
@@ -503,25 +586,83 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F0F2F5" },
-  header: { backgroundColor: "#1877f2", padding: 10, flexDirection: "row", alignItems: "center" },
-  headerTitle: { color: "#FFFFFF", fontSize: 18, fontWeight: "bold", marginLeft: 10 },
-  chatContainer: { flex: 1, padding: 10 },
-  messageContainer: { maxWidth: "80%", padding: 10, borderRadius: 10, marginVertical: 5 },
-  myMessage: { alignSelf: "flex-end", backgroundColor: "#1877f2" },
-  otherMessage: { alignSelf: "flex-start", backgroundColor: "#fff" },
-  messageText: { color: "#000", fontSize: 16 },
-  myMessageText: { color: "white" },
-  otherMessageText: { color: "black" },
-  messageTime: { fontSize: 12, color: "#666", marginTop: 5 },
-  typingText: { color: "#666", fontStyle: "italic" },
-  inputContainer: { flexDirection: "row", alignItems: "center", padding: 10, backgroundColor: "#FFFFFF" },
-  input: { flex: 1, minHeight: 40, backgroundColor: "#F0F2F5", borderRadius: 20, paddingHorizontal: 15 },
+  container: {
+   flex: 1,
+   backgroundColor: "#F0F2F5"
+    },
+  header: {
+   backgroundColor: "#1877f2",
+    padding: 10,
+     flexDirection: "row",
+      alignItems: "center" 
+    },
+  headerTitle: {
+   color: "#FFFFFF", 
+   fontSize: 18, 
+   fontWeight: "bold",
+    marginLeft: 10 
+    },
+  chatContainer: { 
+  flex: 1,
+   padding: 10
+    },
+  messageContainer: { 
+  maxWidth: "80%", 
+  padding: 10, 
+  borderRadius: 10,
+   marginVertical: 5 
+   },
+  myMessage: { 
+  alignSelf: "flex-end",
+   backgroundColor: "#1877f2" 
+   },
+  otherMessage: { 
+  alignSelf: "flex-start",
+   backgroundColor: "#fff" 
+   },
+  messageText: {
+   color: "#000", 
+   fontSize: 16
+    },
+  myMessageText: 
+  { 
+  color: "white" 
+  },
+  otherMessageText: {
+   color: "black"
+    },
+  messageTime: { 
+  fontSize: 12,
+   color: "#666",
+    marginTop: 5 
+    },
+  typingText: { 
+  color: "#666",
+   fontStyle: "italic" 
+   },
+  inputContainer: { 
+  flexDirection: "row",
+   alignItems: "center",
+    padding: 10,
+     backgroundColor: "#FFFFFF"
+      },
+  input: {
+   flex: 1,
+    minHeight: 40,
+     backgroundColor: "#F0F2F5",
+      borderRadius: 20,
+       paddingHorizontal: 15
+        },
   imgPreview: { width: SCREEN_WIDTH * 0.8, height: SCREEN_WIDTH * 0.5, borderRadius: 10 },
   videoPreview: { width: SCREEN_WIDTH * 0.8, height: SCREEN_WIDTH * 0.5, borderRadius: 10 },
   fileContainer: { flexDirection: "row", alignItems: "center" },
   fileName: { color: "#fff", marginLeft: 5 },
-  modalContainer: { flex: 1, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", alignItems: "center" },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   modalContent: {
     backgroundColor: "white",
     padding: 20,
@@ -562,9 +703,32 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold'
   },
-  previewImage: { width: "100%", height: 200, borderRadius: 5 },
-  previewVideo: { width: "100%", height: 200, borderRadius: 5 },
-  fullscreenImage: { width: "100%", height: "100%" },
+  modalHeader: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    padding: 20,
+    paddingTop: 50,
+    zIndex: 1,
+  },
+  closeButton: {
+    padding: 10,
+  },
+  downloadButton: {
+    padding: 10,
+  },
+  fullscreenImage: {
+    width: "100%",
+    height: "100%",
+  },
+  fullscreenVideo: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "black",
+  },
   attachButton: {
     padding: 5,
     marginRight: 5,
