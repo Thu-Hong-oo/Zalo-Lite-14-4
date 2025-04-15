@@ -24,10 +24,21 @@ export default function ChatListScreen({ navigation }) {
   const [error, setError] = useState(null);
   const [userCache, setUserCache] = useState({});
   const [refreshing, setRefreshing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResult, setSearchResult] = useState(null);
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     fetchConversations();
-  }, []);
+
+    // Add focus listener to reload conversations when screen comes into focus
+    const unsubscribe = navigation.addListener("focus", () => {
+      fetchConversations();
+    });
+
+    // Cleanup subscription on unmount
+    return unsubscribe;
+  }, [navigation]);
 
   const fetchUserInfo = async (phone) => {
     try {
@@ -157,6 +168,95 @@ export default function ChatListScreen({ navigation }) {
     return phone.slice(-2);
   };
 
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) {
+      setSearchResult(null);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      // Convert phone number format from 0xxxxxxxx to 84xxxxxxxx
+      let searchPhone = searchQuery.trim();
+      if (searchPhone.startsWith("0")) {
+        searchPhone = "84" + searchPhone.slice(1);
+      }
+
+      console.log("Searching for user:", searchPhone);
+      const result = await fetchUserInfo(searchPhone);
+      console.log("Search result:", result);
+      setSearchResult(result);
+    } catch (error) {
+      console.error("Search error:", error);
+      console.log("Search failed for query:", searchQuery.trim());
+      setSearchResult(null);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.nativeEvent.key === "Enter") {
+      handleSearch();
+    }
+  };
+
+  const renderSearchResult = () => {
+    if (!searchQuery.trim()) return null;
+
+    if (isSearching) {
+      return (
+        <View style={styles.searchResultContainer}>
+          <ActivityIndicator size="small" color="#1877f2" />
+        </View>
+      );
+    }
+
+    if (!searchResult) {
+      return (
+        <View style={styles.searchResultContainer}>
+          <Text style={styles.noResultText}>Không tìm thấy người dùng</Text>
+        </View>
+      );
+    }
+
+    return (
+      <TouchableOpacity
+        style={styles.searchResultItem}
+        onPress={() => {
+          navigation.navigate("ChatDirectly", {
+            title: searchResult.name || searchResult.phone,
+            otherParticipantPhone: searchResult.phone,
+            avatar: searchResult.avatar,
+          });
+          setSearchQuery("");
+          setSearchResult(null);
+        }}
+      >
+        <View style={styles.avatarContainer}>
+          {searchResult.avatar ? (
+            <Image
+              source={{ uri: searchResult.avatar }}
+              style={styles.avatar}
+            />
+          ) : (
+            <View style={styles.avatarTextContainer}>
+              <Text style={styles.avatarText}>
+                {getInitials(searchResult.name || searchResult.phone)}
+              </Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.searchResultContent}>
+          <Text style={styles.searchResultName}>
+            {searchResult.name || searchResult.phone}
+          </Text>
+          <Text style={styles.searchResultPhone}>{searchResult.phone}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   const renderChatItem = ({ item }) => (
     <TouchableOpacity
       style={styles.chatItem}
@@ -232,7 +332,14 @@ export default function ChatListScreen({ navigation }) {
             placeholder="Tìm kiếm"
             placeholderTextColor="#fff"
             style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onSubmitEditing={handleSearch}
+            returnKeyType="search"
           />
+          <TouchableOpacity style={styles.searchButton} onPress={handleSearch}>
+            <Ionicons name="search" size={20} color="#fff" />
+          </TouchableOpacity>
         </View>
         <TouchableOpacity style={styles.headerButton}>
           <Ionicons name="qr-code" size={24} color="#fff" />
@@ -241,6 +348,9 @@ export default function ChatListScreen({ navigation }) {
           <Ionicons name="refresh" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
+
+      {/* Search Results */}
+      {renderSearchResult()}
 
       {/* Tabs */}
       <View style={styles.tabContainer}>
@@ -324,12 +434,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginRight: 16,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    borderRadius: 20,
+    paddingHorizontal: 10,
   },
   searchInput: {
     flex: 1,
     marginLeft: 8,
     color: "#fff",
     fontSize: 16,
+    paddingVertical: 8,
+  },
+  searchButton: {
+    padding: 5,
   },
   headerButton: {
     marginLeft: 16,
@@ -458,5 +575,34 @@ const styles = StyleSheet.create({
   emptyText: {
     color: "#666",
     fontSize: 16,
+  },
+  searchResultContainer: {
+    padding: 10,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e0e0e0",
+  },
+  searchResultItem: {
+    flexDirection: "row",
+    padding: 10,
+    alignItems: "center",
+  },
+  searchResultContent: {
+    marginLeft: 10,
+    flex: 1,
+  },
+  searchResultName: {
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  searchResultPhone: {
+    fontSize: 14,
+    color: "#666",
+    marginTop: 2,
+  },
+  noResultText: {
+    textAlign: "center",
+    color: "#666",
+    padding: 10,
   },
 });
