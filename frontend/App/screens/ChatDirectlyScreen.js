@@ -808,7 +808,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#ccc',
   },
   sendButton: {
-    backgroundColor: '#1877f2',
+    padding: 5,
+    marginLeft: 5,
+    backgroundColor: 'transparent'
   },
   buttonText: {
     color: 'white',
