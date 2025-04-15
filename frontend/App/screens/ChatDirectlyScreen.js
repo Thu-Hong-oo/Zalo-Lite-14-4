@@ -11,17 +11,28 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { io } from "socket.io-client";
-import { getChatHistory, sendMessage } from "../modules/chat/controller";
+import {
+  getChatHistory,
+  sendMessage,
+  recallMessage,
+} from "../modules/chat/controller";
 import { getAccessToken } from "../services/storage";
+
+// Hàm tạo conversationId
+const createParticipantId = (phone1, phone2) => {
+  return [phone1, phone2].sort().join("_");
+};
 
 const ChatDirectlyScreen = ({ route, navigation }) => {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [socket, setSocket] = useState(null);
+  const [selectedMessage, setSelectedMessage] = useState(null);
   const flatListRef = useRef(null);
   const { title, otherParticipantPhone, avatar } = route.params;
 
@@ -55,6 +66,8 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
 
       newSocket.on("connect", () => {
         console.log("Connected to socket server");
+        // Đăng ký nhận tin nhắn cho cuộc trò chuyện hiện tại
+        newSocket.emit("join-chat", { receiverPhone: otherParticipantPhone });
       });
 
       newSocket.on("connect_error", (error) => {
@@ -63,6 +76,8 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
 
       newSocket.on("disconnect", (reason) => {
         console.log("Socket disconnected:", reason);
+        // Rời khỏi cuộc trò chuyện khi disconnect
+        newSocket.emit("leave-chat", { receiverPhone: otherParticipantPhone });
       });
 
       newSocket.on("error", (error) => {
@@ -70,8 +85,24 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
       });
 
       newSocket.on("new-message", (message) => {
+        console.log("Received new message:", message);
         setMessages((prev) => [...prev, message]);
         scrollToBottom();
+      });
+
+      newSocket.on("message-recalled", ({ messageId, conversationId }) => {
+        console.log("Message recalled:", messageId);
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === messageId
+              ? {
+                  ...msg,
+                  content: "Tin nhắn đã bị thu hồi",
+                  status: "recalled",
+                }
+              : msg
+          )
+        );
       });
 
       newSocket.on("typing", ({ senderPhone }) => {
@@ -114,35 +145,47 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     if (!message.trim() || !socket) return;
 
     try {
-      // Gửi tin nhắn qua socket
-      socket.emit("send-message", {
-        receiverPhone: otherParticipantPhone,
-        content: message,
-      });
+      // Tạo messageId tạm thời
+      const tempId = `temp-${Date.now()}`;
 
       // Thêm tin nhắn vào danh sách ngay lập tức
       const newMessage = {
-        messageId: Date.now().toString(), // Tạm thời sử dụng timestamp làm ID
-        senderPhone: "me", // Đảo ngược vì đây là tin nhắn của mình
+        messageId: tempId,
+        senderPhone: "me",
         content: message,
         timestamp: Date.now(),
         status: "sending",
+        isTempId: true,
       };
 
       setMessages((prev) => [...prev, newMessage]);
       setMessage("");
       scrollToBottom();
 
+      // Gửi tin nhắn qua socket
+      socket.emit("send-message", {
+        tempId,
+        receiverPhone: otherParticipantPhone,
+        content: message,
+      });
+
       // Lắng nghe phản hồi từ server
       socket.once("message-sent", (response) => {
-        // Cập nhật trạng thái tin nhắn
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.messageId === newMessage.messageId
-              ? { ...msg, status: "sent" }
-              : msg
-          )
-        );
+        if (response && response.messageId) {
+          // Cập nhật messageId thật từ server
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.messageId === tempId
+                ? {
+                    ...msg,
+                    messageId: response.messageId,
+                    isTempId: false,
+                    status: "sent",
+                  }
+                : msg
+            )
+          );
+        }
       });
 
       socket.once("error", (error) => {
@@ -150,9 +193,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
         // Cập nhật trạng thái lỗi
         setMessages((prev) =>
           prev.map((msg) =>
-            msg.messageId === newMessage.messageId
-              ? { ...msg, status: "error" }
-              : msg
+            msg.messageId === tempId ? { ...msg, status: "error" } : msg
           )
         );
       });
@@ -175,13 +216,73 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     }
   };
 
+  const handleRecallMessage = async (messageId) => {
+    try {
+      // Kiểm tra xem tin nhắn có phải là tin nhắn tạm thời không
+      const targetMessage = messages.find((msg) => msg.messageId === messageId);
+      if (targetMessage?.isTempId || targetMessage?.status === "sending") {
+        Alert.alert("Lỗi", "Không thể thu hồi tin nhắn đang gửi");
+        return;
+      }
+
+      const response = await recallMessage(messageId, otherParticipantPhone);
+      if (response.status === "success") {
+        // Cập nhật UI ngay lập tức
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === messageId
+              ? {
+                  ...msg,
+                  content: "Tin nhắn đã bị thu hồi",
+                  status: "recalled",
+                }
+              : msg
+          )
+        );
+
+        // Gửi sự kiện qua socket với đầy đủ thông tin
+        socket?.emit("message-recalled", {
+          messageId,
+          receiverPhone: otherParticipantPhone,
+          conversationId: createParticipantId(otherParticipantPhone, "me"),
+        });
+      } else {
+        Alert.alert("Lỗi", "Không thể thu hồi tin nhắn");
+      }
+    } catch (error) {
+      console.error("Error recalling message:", error);
+      Alert.alert("Lỗi", "Đã xảy ra lỗi khi thu hồi tin nhắn");
+    }
+  };
+
+  const showMessageOptions = (message) => {
+    // Kiểm tra xem tin nhắn có phải của mình không
+    const isMyMessage =
+      message.senderPhone === "me" ||
+      message.senderPhone !== otherParticipantPhone;
+
+    if (isMyMessage && message.status !== "recalled") {
+      Alert.alert("Tùy chọn tin nhắn", "Bạn muốn làm gì với tin nhắn này?", [
+        {
+          text: "Thu hồi",
+          onPress: () => handleRecallMessage(message.messageId),
+          style: "destructive",
+        },
+        {
+          text: "Hủy",
+          style: "cancel",
+        },
+      ]);
+    }
+  };
+
   const renderMessage = ({ item }) => {
-    //nếu senderPhone khác otherParticipantPhone thì là tin nhắn của mình
     const isMyMessage =
       item.senderPhone != otherParticipantPhone || item.senderPhone == "me";
 
     return (
-      <View
+      <TouchableOpacity
+        onLongPress={() => showMessageOptions(item)}
         style={[
           styles.messageContainer,
           isMyMessage ? styles.myMessage : styles.otherMessage,
@@ -191,6 +292,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
           style={[
             styles.messageText,
             isMyMessage ? styles.myMessageText : styles.otherMessageText,
+            item.status === "recalled" && styles.recalledMessage,
           ]}
         >
           {item.content}
@@ -207,11 +309,13 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
                 ? "✓"
                 : item.status === "error"
                 ? "✕"
+                : item.status === "recalled"
+                ? "Đã thu hồi"
                 : ""}
             </Text>
           )}
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -443,6 +547,10 @@ const styles = StyleSheet.create({
   },
   otherMessageText: {
     color: "black",
+  },
+  recalledMessage: {
+    color: "#999",
+    fontStyle: "italic",
   },
 });
 

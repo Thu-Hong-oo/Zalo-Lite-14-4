@@ -43,3 +43,16 @@ export const markMessageAsRead = async (messageId) => {
     throw error;
   }
 };
+
+export const recallMessage = async (messageId, receiverPhone) => {
+  try {
+    const response = await api.put("/chat/messages/recall", {
+      messageId,
+      receiverPhone,
+    });
+    return response.data;
+  } catch (error) {
+    console.error("❌ Error in recallMessage:", error);
+    throw error;
+  }
+};
