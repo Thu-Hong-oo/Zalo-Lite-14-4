@@ -14,17 +14,17 @@ import {
   Modal,
   Alert,
   Dimensions,
+  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { io } from "socket.io-client";
 import { getChatHistory, sendMessage } from "../modules/chat/controller";
 import { getAccessToken } from "../services/storage";
-import * as ImagePicker from 'expo-image-picker';
-import { Video } from 'expo-av';
-import * as MediaLibrary from 'expo-media-library';
-import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from "expo-image-picker";
+import { Video } from "expo-av";
+import * as DocumentPicker from "expo-document-picker";
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 const ChatDirectlyScreen = ({ route, navigation }) => {
   const [message, setMessage] = useState("");
@@ -35,70 +35,42 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const [showFilePreview, setShowFilePreview] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const flatListRef = useRef(null);
   const { title, otherParticipantPhone, avatar } = route.params;
 
   useEffect(() => {
     initializeSocket();
     loadChatHistory();
-
     return () => {
-      if (socket) {
-        socket.disconnect();
-      }
+      if (socket) socket.disconnect();
     };
   }, []);
-
-  //khởi tạo socket
 
   const initializeSocket = async () => {
     try {
       const token = await getAccessToken();
       const newSocket = io("http://192.168.1.198:3000", {
-        auth: {
-          token,
-        },
+        auth: { token },
         transports: ["websocket", "polling"],
         forceNew: true,
         reconnection: true,
         reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        timeout: 20000,
       });
 
-      newSocket.on("connect", () => {
-        console.log("Connected to socket server");
-      });
-
-      newSocket.on("connect_error", (error) => {
-        console.error("Socket connection error:", error);
-      });
-
-      newSocket.on("disconnect", (reason) => {
-        console.log("Socket disconnected:", reason);
-      });
-
-      newSocket.on("error", (error) => {
-        console.error("Socket error:", error);
-      });
-
+      newSocket.on("connect", () => console.log("Connected to socket server"));
+      newSocket.on("connect_error", (error) => console.error("Socket connection error:", error));
       newSocket.on("new-message", (message) => {
         setMessages((prev) => [...prev, message]);
         scrollToBottom();
       });
-
       newSocket.on("typing", ({ senderPhone }) => {
-        if (senderPhone === otherParticipantPhone) {
-          setIsTyping(true);
-        }
+        if (senderPhone === otherParticipantPhone) setIsTyping(true);
       });
-
       newSocket.on("stop-typing", ({ senderPhone }) => {
-        if (senderPhone === otherParticipantPhone) {
-          setIsTyping(false);
-        }
+        if (senderPhone === otherParticipantPhone) setIsTyping(false);
       });
-
       setSocket(newSocket);
     } catch (error) {
       console.error("Socket initialization error:", error);
@@ -118,73 +90,112 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   };
 
   const scrollToBottom = () => {
-    if (flatListRef.current) {
-      flatListRef.current.scrollToEnd({ animated: true });
-    }
+    if (flatListRef.current) flatListRef.current.scrollToEnd({ animated: true });
   };
 
   const handleSendMessage = async () => {
-    if (!message.trim() || !socket) return;
+    if (!message.trim() && !selectedFiles.length) return;
 
     try {
-      // Gửi tin nhắn qua socket
-      socket.emit("send-message", {
-        receiverPhone: otherParticipantPhone,
-        content: message,
-      });
+      if (message.trim()) {
+        socket.emit("send-message", {
+          receiverPhone: otherParticipantPhone,
+          content: message.trim(),
+        });
 
-      // Thêm tin nhắn vào danh sách ngay lập tức
-      const newMessage = {
-        messageId: Date.now().toString(), // Tạm thời sử dụng timestamp làm ID
-        senderPhone: "me", // Đảo ngược vì đây là tin nhắn của mình
-        content: message,
-        timestamp: Date.now(),
-        status: "sending",
-      };
+        const newMessage = {
+          messageId: Date.now().toString(),
+          senderPhone: "me",
+          content: message.trim(),
+          type: "text",
+          timestamp: Date.now(),
+          status: "sending",
+        };
 
-      setMessages((prev) => [...prev, newMessage]);
-      setMessage("");
-      scrollToBottom();
+        setMessages((prev) => [...prev, newMessage]);
+        setMessage("");
+        scrollToBottom();
+      }
 
-      // Lắng nghe phản hồi từ server
-      socket.once("message-sent", (response) => {
-        // Cập nhật trạng thái tin nhắn
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.messageId === newMessage.messageId
-              ? { ...msg, status: "sent" }
-              : msg
-          )
-        );
-      });
-
-      socket.once("error", (error) => {
-        console.error("Error sending message:", error);
-        // Cập nhật trạng thái lỗi
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.messageId === newMessage.messageId
-              ? { ...msg, status: "error" }
-              : msg
-          )
-        );
-      });
-
-      socket.emit("stop-typing", { receiverPhone: otherParticipantPhone });
+      if (selectedFiles.length > 0) {
+        await handleUpload(selectedFiles);
+      }
     } catch (error) {
       console.error("Error sending message:", error);
+      Alert.alert("Lỗi", "Không thể gửi tin nhắn");
     }
   };
 
-  const handleTyping = () => {
-    if (socket) {
-      socket.emit("typing", { receiverPhone: otherParticipantPhone });
-    }
-  };
+  const handleUpload = async (files) => {
+    if (!files || files.length === 0) return;
 
-  const handleStopTyping = () => {
-    if (socket) {
-      socket.emit("stop-typing", { receiverPhone: otherParticipantPhone });
+    try {
+      setIsUploading(true);
+      setUploadProgress(0);
+
+      const formData = new FormData();
+      files.forEach((file, index) => {
+        formData.append("files", {
+          uri: file.uri,
+          type: file.type,
+          name: file.name,
+        });
+      });
+
+      const token = await getAccessToken();
+      console.log("Starting upload with token:", token);
+      console.log("Files to upload:", files);
+
+      const response = await fetch("http://192.168.1.198:3000/api/chat/upload", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "multipart/form-data",
+        },
+        body: formData,
+      });
+
+      console.log("Upload response status:", response.status);
+      const result = await response.json();
+      console.log("Upload result:", result);
+
+      if (result.status === "error") {
+        Alert.alert("Lỗi", result.message || "Không thể upload file");
+        return;
+      }
+
+      setUploadProgress(100);
+
+      result.data.urls.forEach((url, index) => {
+        const file = files[index];
+        socket.emit("send-message", {
+          receiverPhone: otherParticipantPhone,
+          fileUrl: url,
+          fileType: file.type,
+        });
+
+        const newMessage = {
+          messageId: Date.now().toString() + index,
+          senderPhone: "me",
+          content: url,
+          type: "file",
+          fileType: file.type,
+          timestamp: Date.now(),
+          status: "sending",
+        };
+
+        setMessages((prev) => [...prev, newMessage]);
+      });
+
+      setSelectedFiles([]);
+      setShowFilePreview(false);
+      scrollToBottom();
+    } catch (error) {
+      console.error("Upload error details:", error);
+      Alert.alert("Lỗi", "Không thể upload file. Chi tiết: " + error.message);
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -192,22 +203,21 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 1,
+        allowsMultipleSelection: true,
+        selectionLimit: 10,
       });
 
       if (!result.canceled) {
-        const file = {
-          uri: result.assets[0].uri,
-          type: 'image/jpeg',
-          name: 'image.jpg'
-        };
-        setSelectedFiles([file]);
+        const files = result.assets.map((asset) => ({
+          uri: asset.uri,
+          type: "image/jpeg",
+          name: `image_${Date.now()}.jpg`,
+        }));
+        setSelectedFiles(files);
         setShowFilePreview(true);
       }
     } catch (error) {
-      Alert.alert('Lỗi', 'Không thể chọn ảnh');
+      Alert.alert("Lỗi", "Không thể chọn ảnh");
     }
   };
 
@@ -215,158 +225,86 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-        allowsEditing: true,
-        quality: 1,
+        allowsMultipleSelection: true,
+        selectionLimit: 5,
       });
 
       if (!result.canceled) {
-        const file = {
-          uri: result.assets[0].uri,
-          type: 'video/mp4',
-          name: 'video.mp4'
-        };
-        setSelectedFiles([file]);
+        const files = result.assets.map((asset) => ({
+          uri: asset.uri,
+          type: "video/mp4",
+          name: `video_${Date.now()}.mp4`,
+        }));
+        setSelectedFiles(files);
         setShowFilePreview(true);
       }
     } catch (error) {
-      Alert.alert('Lỗi', 'Không thể chọn video');
+      Alert.alert("Lỗi", "Không thể chọn video");
     }
   };
 
   const pickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: '*/*',
-        copyToCacheDirectory: true
+        type: "*/*",
+        multiple: true,
       });
 
-      if (result.type === 'success') {
-        const file = {
-          uri: result.uri,
-          type: result.mimeType,
-          name: result.name
-        };
-        setSelectedFiles([file]);
+      if (result.type === "success") {
+        const files = [result].map((asset) => ({
+          uri: asset.uri,
+          type: asset.mimeType,
+          name: asset.name,
+        }));
+        setSelectedFiles(files);
         setShowFilePreview(true);
       }
     } catch (error) {
-      Alert.alert('Lỗi', 'Không thể chọn file');
-    }
-  };
-
-  const handleUpload = async () => {
-    if (selectedFiles.length === 0) return;
-
-    try {
-      const formData = new FormData();
-      selectedFiles.forEach((file, index) => {
-        formData.append('files', {
-          uri: file.uri,
-          type: file.type,
-          name: file.name
-        });
-      });
-
-      const token = await getAccessToken();
-      const response = await fetch('http://192.168.2.118:3000/api/chat/upload', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'multipart/form-data',
-        },
-        body: formData,
-      });
-
-      const result = await response.json();
-      
-      if (result.status === 'success') {
-        result.data.urls.forEach((url, index) => {
-          const newMessage = {
-            messageId: Date.now().toString(),
-            senderPhone: "me",
-            content: url,
-            type: 'file',
-            fileType: selectedFiles[index].type,
-            timestamp: Date.now(),
-            status: "sending"
-          };
-
-          setMessages((prev) => [...prev, newMessage]);
-          scrollToBottom();
-
-          socket.emit("send-message", {
-            receiverPhone: otherParticipantPhone,
-            content: url,
-            type: 'file',
-            fileType: selectedFiles[index].type
-          });
-        });
-        
-        setSelectedFiles([]);
-        setShowFilePreview(false);
-      } else {
-        Alert.alert('Lỗi', result.message || 'Upload thất bại');
-      }
-    } catch (error) {
-      Alert.alert('Lỗi', 'Không thể upload file');
+      Alert.alert("Lỗi", "Không thể chọn file");
     }
   };
 
   const renderMessage = ({ item }) => {
     const isMyMessage = item.senderPhone !== otherParticipantPhone;
 
+    const handleFilePress = async () => {
+      if (item.fileType?.startsWith("image/")) {
+        setPreviewImage(item.content);
+        setShowImagePreview(true);
+      } else if (item.fileType?.startsWith("video/")) {
+        // Handle video
+      } else {
+        try {
+          const supported = await Linking.canOpenURL(item.content);
+          if (supported) await Linking.openURL(item.content);
+          else Alert.alert("Không thể mở file", "URL: " + item.content);
+        } catch (error) {
+          Alert.alert("Lỗi", "Không thể mở file");
+        }
+      }
+    };
+
     return (
       <View style={[styles.messageContainer, isMyMessage ? styles.myMessage : styles.otherMessage]}>
-        {item.type === 'text' ? (
-          <Text style={styles.messageText}>{item.content}</Text>
-        ) : item.type === 'file' ? (
-          <TouchableOpacity onPress={() => {
-            if (item.fileType.startsWith('image/')) {
-              setPreviewImage(item.content);
-              setShowImagePreview(true);
-            }
-          }}>
-            {item.fileType.startsWith('image/') ? (
-              <Image 
-                source={{ uri: item.content }} 
-                style={styles.imgPreview}
-                resizeMode="contain"
-              />
-            ) : item.fileType.startsWith('video/') ? (
-              <View style={styles.videoContainer}>
-                <Video
-                  source={{ uri: item.content }}
-                  style={styles.videoPreview}
-                  resizeMode="contain"
-                  useNativeControls
-                  isLooping={true}
-                  shouldPlay={false}
-                />
-              </View>
+        {item.type === "text" ? (
+          <Text style={[styles.messageText, isMyMessage ? styles.myMessageText : styles.otherMessageText]}>
+            {item.content}
+          </Text>
+        ) : item.type === "file" ? (
+          <TouchableOpacity onPress={handleFilePress}>
+            {item.fileType?.startsWith("image/") ? (
+              <Image source={{ uri: item.content }} style={styles.imgPreview} resizeMode="contain" />
+            ) : item.fileType?.startsWith("video/") ? (
+              <Video source={{ uri: item.content }} style={styles.videoPreview} resizeMode="contain" useNativeControls />
             ) : (
               <View style={styles.fileContainer}>
                 <Ionicons name="document" size={24} color="white" />
-                <Text style={styles.fileName}>{item.content.split('/').pop()}</Text>
+                <Text style={styles.fileName}>{item.content.split("/").pop()}</Text>
               </View>
             )}
           </TouchableOpacity>
         ) : null}
-        <View style={styles.messageFooter}>
-          <Text style={styles.messageTime}>
-            {new Date(item.timestamp).toLocaleTimeString()}
-          </Text>
-          {isMyMessage && (
-            <Text style={styles.messageStatus}>
-              {item.status === "sending"
-                ? "Đang gửi..."
-                : item.status === "sent"
-                ? "✓"
-                : item.status === "error"
-                ? "✕"
-                : ""}
-            </Text>
-          )}
-        </View>
+        <Text style={styles.messageTime}>{new Date(item.timestamp).toLocaleTimeString()}</Text>
       </View>
     );
   };
@@ -374,162 +312,76 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1877f2" />
-
-      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerContent}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="arrow-back" size={24} color="white" />
-          </TouchableOpacity>
-
-          <View style={styles.userInfo}>
-            {avatar ? (
-              <Image source={{ uri: avatar }} style={styles.avatar} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarText}>{title.slice(0, 2)}</Text>
-              </View>
-            )}
-            <Text style={styles.headerTitle}>{title}</Text>
-          </View>
-
-          <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.actionButton}>
-              <Ionicons name="call" size={24} color="white" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton}>
-              <Ionicons name="videocam" size={24} color="white" />
-            </TouchableOpacity>
-          </View>
-        </View>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={24} color="white" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{title}</Text>
       </View>
-
-      {/* Chat Messages Area */}
-      <KeyboardAvoidingView
-        style={styles.chatContainer}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
-      >
+      <KeyboardAvoidingView style={styles.chatContainer} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <FlatList
           ref={flatListRef}
           data={messages}
           renderItem={renderMessage}
           keyExtractor={(item) => item.messageId}
           onContentSizeChange={scrollToBottom}
-          onLayout={scrollToBottom}
         />
-        {isTyping && (
-          <View style={styles.typingIndicator}>
-            <Text style={styles.typingText}>Đang soạn tin nhắn...</Text>
-          </View>
-        )}
+        {isTyping && <Text style={styles.typingText}>Đang soạn tin nhắn...</Text>}
       </KeyboardAvoidingView>
-
-      {/* Message Input */}
       <View style={styles.inputContainer}>
-        <TouchableOpacity style={styles.attachButton} onPress={pickImage}>
+        <TouchableOpacity onPress={pickImage}>
           <Ionicons name="image" size={24} color="#666" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.attachButton} onPress={pickVideo}>
+        <TouchableOpacity onPress={pickVideo}>
           <Ionicons name="videocam" size={24} color="#666" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.attachButton} onPress={pickDocument}>
+        <TouchableOpacity onPress={pickDocument}>
           <Ionicons name="document" size={24} color="#666" />
         </TouchableOpacity>
-
         <TextInput
           style={styles.input}
           placeholder="Tin nhắn"
           value={message}
           onChangeText={setMessage}
-          onFocus={handleTyping}
-          onBlur={handleStopTyping}
           multiline
         />
-
-        <TouchableOpacity
-          style={styles.sendButton}
-          onPress={handleSendMessage}
-          disabled={!message.trim()}
-        >
-          <Ionicons
-            name="send"
-            size={24}
-            color={message.trim() ? "#1877f2" : "#666"}
-          />
+        <TouchableOpacity onPress={handleSendMessage}>
+          <Ionicons name="send" size={24} color={message.trim() || selectedFiles.length ? "#1877f2" : "#666"} />
         </TouchableOpacity>
       </View>
-
-      {/* File Preview Modal */}
-      <Modal
-        visible={showFilePreview}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowFilePreview(false)}
-      >
+      <Modal visible={showFilePreview} transparent={true} animationType="slide">
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
-            {selectedFiles.map((file, index) => (
-              <View key={index} style={styles.previewItem}>
-                {file.type.startsWith('image/') ? (
-                  <Image
-                    source={{ uri: file.uri }}
-                    style={styles.previewImage}
-                    resizeMode="contain"
-                  />
-                ) : file.type.startsWith('video/') ? (
-                  <Video
-                    source={{ uri: file.uri }}
-                    style={styles.previewVideo}
-                    resizeMode="contain"
-                    useNativeControls
-                    isLooping={true}
-                  />
-                ) : (
-                  <Text>{file.name}</Text>
-                )}
+            <Text style={styles.modalTitle}>Đã chọn {selectedFiles.length} file</Text>
+            {isUploading ? (
+              <View style={styles.uploadStatus}>
+                <Text>Đang upload... {uploadProgress}%</Text>
               </View>
-            ))}
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowFilePreview(false)}
-              >
-                <Text style={styles.buttonText}>Hủy</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.sendButton]}
-                onPress={handleUpload}
-              >
-                <Text style={styles.buttonText}>Gửi</Text>
-              </TouchableOpacity>
-            </View>
+            ) : (
+              <View style={styles.modalButtons}>
+                <TouchableOpacity 
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => setShowFilePreview(false)}
+                >
+                  <Text style={styles.buttonText}>Hủy</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.modalButton, styles.sendButton]}
+                  onPress={() => handleUpload(selectedFiles)}
+                >
+                  <Text style={styles.buttonText}>Gửi</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </View>
       </Modal>
-
-      {/* Image Preview Modal */}
-      <Modal
-        visible={showImagePreview}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowImagePreview(false)}
-      >
+      <Modal visible={showImagePreview} transparent={true} animationType="fade">
         <View style={styles.modalContainer}>
-          <TouchableOpacity 
-            style={styles.closeButton}
-            onPress={() => setShowImagePreview(false)}
-          >
+          <TouchableOpacity onPress={() => setShowImagePreview(false)}>
             <Ionicons name="close" size={30} color="white" />
           </TouchableOpacity>
-          <Image
-            source={{ uri: previewImage }}
-            style={styles.fullscreenImage}
-            resizeMode="contain"
-          />
+          <Image source={{ uri: previewImage }} style={styles.fullscreenImage} resizeMode="contain" />
         </View>
       </Modal>
     </SafeAreaView>
@@ -537,247 +389,66 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F0F2F5",
-  },
-  header: {
-    backgroundColor: "#1877f2",
-    paddingTop: 10,
-    paddingBottom: 10,
-  },
-  headerContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 15,
-  },
-  backButton: {
-    padding: 5,
-  },
-  userInfo: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    marginLeft: 10,
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 10,
-  },
-  avatarPlaceholder: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#fff",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 10,
-  },
-  avatarText: {
-    color: "#1877f2",
-    fontWeight: "bold",
-  },
-  headerTitle: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "bold",
-  },
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  actionButton: {
-    padding: 8,
-    marginLeft: 5,
-  },
-  chatContainer: {
-    flex: 1,
-    padding: 10,
-  },
-  messageContainer: {
-    maxWidth: "80%",
-    padding: 10,
-    borderRadius: 10,
-    marginVertical: 5,
-    overflow: 'hidden',
-  },
-  myMessage: {
-    alignSelf: "flex-end",
-    backgroundColor: "#1877f2",
-  },
-  otherMessage: {
-    alignSelf: "flex-start",
-    backgroundColor: "#fff",
-  },
-  messageText: {
-    color: "#000",
-    fontSize: 16,
-  },
-  messageTime: {
-    fontSize: 12,
-    color: "#666",
-    marginTop: 5,
-    alignSelf: "flex-end",
-  },
-  typingIndicator: {
-    padding: 10,
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    marginVertical: 5,
-    alignSelf: "flex-start",
-  },
-  typingText: {
-    color: "#666",
-    fontStyle: "italic",
-  },
-  inputContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 10,
-    backgroundColor: "#FFFFFF",
-    borderTopWidth: 1,
-    borderTopColor: "#E5E5E5",
-  },
-  imgPreview: {
-    width: SCREEN_WIDTH * 0.8,
-    height: SCREEN_WIDTH * 0.5,
-    borderRadius: 10,
-    alignSelf: 'center',
-    backgroundColor: '#fff',
-  },
-  attachButton: {
-    padding: 5,
-    marginRight: 5,
-  },
-  input: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 100,
-    backgroundColor: "#F0F2F5",
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    fontSize: 16,
-    marginHorizontal: 5,
-  },
-  sendButton: {
-    padding: 5,
-    marginLeft: 5,
-  },
-  messageFooter: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    alignItems: "center",
-    marginTop: 5,
-  },
-  messageStatus: {
-    marginLeft: 5,
-    fontSize: 12,
-    color: "#666",
-  },
-  myMessageText: {
-    color: "white",
-  },
-  otherMessageText: {
-    color: "black",
-  },
-  filePreview: {
-    width: 100,
-    height: 100,
-    borderRadius: 5,
-  },
-  videoContainer: {
-    width: SCREEN_WIDTH * 0.8,
-    height: SCREEN_WIDTH * 1.2,
-    borderRadius: 10,
-    position: "relative",
-    backgroundColor: '#fff',
-    padding: 10,
-    alignSelf: 'center',
-  },
-  videoPreview: {
-    width: "100%",
-    height: "100%",
-    borderRadius: 10,
-  },
-  playButton: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    borderRadius: 5,
-  },
-  fileContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 5,
-  },
-  fileName: {
-    color: "#000",
-    fontSize: 12,
-    marginLeft: 5,
-  },
-  modalContainer: {
-    flex: 1,
-    backgroundColor: 'black',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  closeButton: {
-    position: 'absolute',
-    top: 40,
-    right: 20,
-    zIndex: 1,
-    padding: 10,
-  },
-  fullscreenImage: {
-    width: '100%',
-    height: '100%',
-  },
+  container: { flex: 1, backgroundColor: "#F0F2F5" },
+  header: { backgroundColor: "#1877f2", padding: 10, flexDirection: "row", alignItems: "center" },
+  headerTitle: { color: "#FFFFFF", fontSize: 18, fontWeight: "bold", marginLeft: 10 },
+  chatContainer: { flex: 1, padding: 10 },
+  messageContainer: { maxWidth: "80%", padding: 10, borderRadius: 10, marginVertical: 5 },
+  myMessage: { alignSelf: "flex-end", backgroundColor: "#1877f2" },
+  otherMessage: { alignSelf: "flex-start", backgroundColor: "#fff" },
+  messageText: { color: "#000", fontSize: 16 },
+  myMessageText: { color: "white" },
+  otherMessageText: { color: "black" },
+  messageTime: { fontSize: 12, color: "#666", marginTop: 5 },
+  typingText: { color: "#666", fontStyle: "italic" },
+  inputContainer: { flexDirection: "row", alignItems: "center", padding: 10, backgroundColor: "#FFFFFF" },
+  input: { flex: 1, minHeight: 40, backgroundColor: "#F0F2F5", borderRadius: 20, paddingHorizontal: 15 },
+  imgPreview: { width: SCREEN_WIDTH * 0.8, height: SCREEN_WIDTH * 0.5, borderRadius: 10 },
+  videoPreview: { width: SCREEN_WIDTH * 0.8, height: SCREEN_WIDTH * 0.5, borderRadius: 10 },
+  fileContainer: { flexDirection: "row", alignItems: "center" },
+  fileName: { color: "#fff", marginLeft: 5 },
+  modalContainer: { flex: 1, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", alignItems: "center" },
   modalContent: {
     backgroundColor: "white",
-    borderRadius: 10,
     padding: 20,
+    borderRadius: 10,
     width: "90%",
-    maxHeight: "80%",
+    alignItems: 'center'
   },
-  previewItem: {
-    marginBottom: 10,
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 20
   },
-  previewImage: {
-    width: "100%",
-    height: 200,
-    borderRadius: 5,
-  },
-  previewVideo: {
-    width: "100%",
-    height: 300,
-    borderRadius: 5,
+  uploadStatus: {
+    marginTop: 20,
+    alignItems: 'center'
   },
   modalButtons: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    marginTop: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+    width: '100%'
   },
   modalButton: {
     padding: 10,
     borderRadius: 5,
-    marginLeft: 10,
+    minWidth: 100,
+    alignItems: 'center'
   },
   cancelButton: {
-    backgroundColor: "#ccc",
+    backgroundColor: '#ccc'
+  },
+  sendButton: {
+    backgroundColor: '#1877f2'
   },
   buttonText: {
-    color: "white",
-    fontWeight: "bold",
+    color: 'white',
+    fontWeight: 'bold'
   },
+  previewImage: { width: "100%", height: 200, borderRadius: 5 },
+  previewVideo: { width: "100%", height: 200, borderRadius: 5 },
+  fullscreenImage: { width: "100%", height: "100%" },
 });
 
 export default ChatDirectlyScreen;
