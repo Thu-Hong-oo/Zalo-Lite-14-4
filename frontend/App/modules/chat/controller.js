@@ -70,3 +70,15 @@ export const forwardMessage = async (messageId, receiverPhone, content) => {
     throw error;
   }
 };
+
+export const deleteMessage = async (messageId) => {
+  try {
+    const response = await api.delete("/chat/messages/delete", {
+      data: { messageId },
+    });
+    return response.data;
+  } catch (error) {
+    console.error("❌ Error in deleteMessage:", error);
+    throw error;
+  }
+};

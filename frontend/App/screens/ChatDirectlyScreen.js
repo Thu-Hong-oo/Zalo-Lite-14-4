@@ -20,6 +20,7 @@ import {
   sendMessage,
   recallMessage,
   forwardMessage,
+  deleteMessage,
 } from "../modules/chat/controller";
 import { getAccessToken } from "../services/storage";
 import ForwardMessageModal from "./ForwardMessageModal";
@@ -258,6 +259,44 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     }
   };
 
+  const handleDeleteMessage = async (messageId) => {
+    try {
+      // Kiểm tra xem tin nhắn có phải là tin nhắn tạm thời không
+      const targetMessage = messages.find((msg) => msg.messageId === messageId);
+      if (targetMessage?.isTempId || targetMessage?.status === "sending") {
+        Alert.alert("Lỗi", "Không thể xóa tin nhắn đang gửi");
+        return;
+      }
+
+      const response = await deleteMessage(messageId);
+      if (response.status === "success") {
+        // Cập nhật UI ngay lập tức
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === messageId
+              ? {
+                  ...msg,
+                  content: "Tin nhắn đã bị xóa",
+                  status: "deleted",
+                }
+              : msg
+          )
+        );
+
+        // Gửi sự kiện qua socket với đầy đủ thông tin
+        socket?.emit("message-deleted", {
+          messageId,
+          conversationId: createParticipantId(otherParticipantPhone, "me"),
+        });
+      } else {
+        Alert.alert("Lỗi", "Không thể xóa tin nhắn");
+      }
+    } catch (error) {
+      console.error("Error deleting message:", error);
+      Alert.alert("Lỗi", "Đã xảy ra lỗi khi xóa tin nhắn");
+    }
+  };
+
   const showMessageOptions = (message) => {
     setSelectedMessage(message);
     const options = [
@@ -270,6 +309,11 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
         onPress: () => {
           setForwardModalVisible(true);
         },
+      },
+      {
+        text: "Xóa",
+        onPress: () => handleDeleteMessage(message.messageId),
+        style: "destructive",
       },
     ];
     Alert.alert("Tùy chọn", "", options);
@@ -308,6 +352,11 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     const isMyMessage =
       item.senderPhone != otherParticipantPhone || item.senderPhone == "me";
 
+    // Skip rendering deleted messages if they are the user's own messages
+    if (isMyMessage && item.status === "deleted") {
+      return null;
+    }
+
     return (
       <TouchableOpacity
         onLongPress={() => showMessageOptions(item)}
@@ -321,6 +370,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
             styles.messageText,
             isMyMessage ? styles.myMessageText : styles.otherMessageText,
             item.status === "recalled" && styles.recalledMessage,
+            item.status === "deleted" && styles.recalledMessage, // Apply same style for deleted messages
           ]}
         >
           {item.content}
@@ -339,6 +389,8 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
                 ? "✕"
                 : item.status === "recalled"
                 ? "Đã thu hồi"
+                : item.status === "deleted"
+                ? "Đã xóa"
                 : ""}
             </Text>
           )}
