@@ -56,3 +56,17 @@ export const recallMessage = async (messageId, receiverPhone) => {
     throw error;
   }
 };
+
+export const forwardMessage = async (messageId, receiverPhone, content) => {
+  try {
+    const response = await api.post("/chat/messages/forward", {
+      messageId,
+      receiverPhone,
+      content,
+    });
+    return response.data;
+  } catch (error) {
+    console.error("❌ Error in forwardMessage:", error);
+    throw error;
+  }
+};

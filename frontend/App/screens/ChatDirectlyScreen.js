@@ -19,8 +19,10 @@ import {
   getChatHistory,
   sendMessage,
   recallMessage,
+  forwardMessage,
 } from "../modules/chat/controller";
 import { getAccessToken } from "../services/storage";
+import ForwardMessageModal from "./ForwardMessageModal";
 
 // Hàm tạo conversationId
 const createParticipantId = (phone1, phone2) => {
@@ -33,6 +35,7 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const [isTyping, setIsTyping] = useState(false);
   const [socket, setSocket] = useState(null);
   const [selectedMessage, setSelectedMessage] = useState(null);
+  const [forwardModalVisible, setForwardModalVisible] = useState(false);
   const flatListRef = useRef(null);
   const { title, otherParticipantPhone, avatar } = route.params;
 
@@ -256,23 +259,48 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   };
 
   const showMessageOptions = (message) => {
-    // Kiểm tra xem tin nhắn có phải của mình không
-    const isMyMessage =
-      message.senderPhone === "me" ||
-      message.senderPhone !== otherParticipantPhone;
+    setSelectedMessage(message);
+    const options = [
+      {
+        text: "Thu hồi",
+        onPress: () => handleRecallMessage(message.messageId),
+      },
+      {
+        text: "Chuyển tiếp",
+        onPress: () => {
+          setForwardModalVisible(true);
+        },
+      },
+    ];
+    Alert.alert("Tùy chọn", "", options);
+  };
 
-    if (isMyMessage && message.status !== "recalled") {
-      Alert.alert("Tùy chọn tin nhắn", "Bạn muốn làm gì với tin nhắn này?", [
-        {
-          text: "Thu hồi",
-          onPress: () => handleRecallMessage(message.messageId),
-          style: "destructive",
-        },
-        {
-          text: "Hủy",
-          style: "cancel",
-        },
-      ]);
+  const handleForwardMessage = async (receiverPhones) => {
+    try {
+      if (!selectedMessage) return;
+
+      const promises = receiverPhones.map((receiverPhone) =>
+        forwardMessage(
+          selectedMessage.messageId,
+          receiverPhone,
+          selectedMessage.content
+        )
+      );
+
+      const results = await Promise.all(promises);
+      const allSuccessful = results.every((res) => res.status === "success");
+
+      if (allSuccessful) {
+        setForwardModalVisible(false);
+        Alert.alert("Thành công", "Tin nhắn đã được chuyển tiếp");
+      } else {
+        throw new Error("Có lỗi xảy ra khi chuyển tiếp tin nhắn");
+      }
+    } catch (error) {
+      console.error("Error forwarding message:", error);
+      Alert.alert("Lỗi", error.message || "Không thể chuyển tiếp tin nhắn");
+    } finally {
+      setSelectedMessage(null);
     }
   };
 
@@ -404,6 +432,12 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
           />
         </TouchableOpacity>
       </View>
+
+      <ForwardMessageModal
+        visible={forwardModalVisible}
+        onClose={() => setForwardModalVisible(false)}
+        onForward={handleForwardMessage}
+      />
     </SafeAreaView>
   );
 };
