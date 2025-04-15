@@ -15,6 +15,7 @@ import {
   Alert,
   Dimensions,
   Linking,
+  ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { io } from "socket.io-client";
@@ -286,20 +287,30 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
   const pickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: "*/*",
+        type: [
+          "application/pdf",
+          "application/msword",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "application/vnd.ms-powerpoint",
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        ],
         multiple: true,
+        copyToCacheDirectory: true
       });
 
-      if (result.type === "success") {
-        const files = [result].map((asset) => ({
+      if (!result.canceled) {
+        const files = result.assets.map((asset) => ({
           uri: asset.uri,
           type: asset.mimeType,
           name: asset.name,
+          size: asset.size
         }));
+        console.log("Selected files:", files); // Debug log
         setSelectedFiles(files);
         setShowFilePreview(true);
       }
     } catch (error) {
+      console.error("Document picker error:", error);
       Alert.alert("Lỗi", "Không thể chọn file");
     }
   };
@@ -416,6 +427,21 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     }
   };
 
+  const getFileIcon = (mimeType) => {
+    if (mimeType.includes('pdf')) return 'document-text';
+    if (mimeType.includes('word')) return 'document-text';
+    if (mimeType.includes('powerpoint')) return 'document-text';
+    return 'document';
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1877f2" />
@@ -502,6 +528,38 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Đã chọn {selectedFiles.length} file</Text>
+            <ScrollView style={styles.fileList}>
+              {selectedFiles.map((file, index) => (
+                <View key={index} style={styles.fileItem}>
+                  <Ionicons 
+                    name={getFileIcon(file.type)} 
+                    size={24} 
+                    color="#1877f2" 
+                  />
+                  <View style={styles.fileInfo}>
+                    <Text style={styles.fileName} numberOfLines={1}>
+                      {file.name}
+                    </Text>
+                    <Text style={styles.fileSize}>
+                      {formatFileSize(file.size)}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.removeFileButton}
+                    onPress={() => {
+                      const newFiles = [...selectedFiles];
+                      newFiles.splice(index, 1);
+                      setSelectedFiles(newFiles);
+                      if (newFiles.length === 0) {
+                        setShowFilePreview(false);
+                      }
+                    }}
+                  >
+                    <Ionicons name="close-circle" size={24} color="#666" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
             {isUploading ? (
               <View style={styles.uploadStatus}>
                 <Text>Đang upload... {uploadProgress}%</Text>
@@ -510,13 +568,17 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
               <View style={styles.modalButtons}>
                 <TouchableOpacity 
                   style={[styles.modalButton, styles.cancelButton]}
-                  onPress={() => setShowFilePreview(false)}
+                  onPress={() => {
+                    setShowFilePreview(false);
+                    setSelectedFiles([]);
+                  }}
                 >
                   <Text style={styles.buttonText}>Hủy</Text>
                 </TouchableOpacity>
                 <TouchableOpacity 
                   style={[styles.modalButton, styles.sendButton]}
                   onPress={() => handleUpload(selectedFiles)}
+                  disabled={selectedFiles.length === 0}
                 >
                   <Text style={styles.buttonText}>Gửi</Text>
                 </TouchableOpacity>
@@ -659,49 +721,75 @@ const styles = StyleSheet.create({
   fileName: { color: "#fff", marginLeft: 5 },
   modalContainer: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.9)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: "white",
-    padding: 20,
+    backgroundColor: 'white',
     borderRadius: 10,
-    width: "90%",
-    alignItems: 'center'
+    padding: 20,
+    width: '90%',
+    maxHeight: '80%',
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 20
+    marginBottom: 10,
+    textAlign: 'center',
   },
-  uploadStatus: {
-    marginTop: 20,
-    alignItems: 'center'
+  fileList: {
+    maxHeight: 300,
+    marginVertical: 10,
+  },
+  fileItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  fileInfo: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  fileName: {
+    fontSize: 14,
+    color: '#333',
+  },
+  fileSize: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  removeFileButton: {
+    padding: 5,
   },
   modalButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 20,
-    width: '100%'
   },
   modalButton: {
     padding: 10,
     borderRadius: 5,
     minWidth: 100,
-    alignItems: 'center'
+    alignItems: 'center',
   },
   cancelButton: {
-    backgroundColor: '#ccc'
+    backgroundColor: '#ccc',
   },
   sendButton: {
-    padding: 5,
-    marginLeft: 5,
-    backgroundColor: 'transparent'
+    backgroundColor: '#1877f2',
   },
   buttonText: {
     color: 'white',
-    fontWeight: 'bold'
+    fontWeight: 'bold',
+  },
+  uploadStatus: {
+    marginTop: 20,
+    alignItems: 'center',
   },
   modalHeader: {
     position: "absolute",
@@ -745,9 +833,6 @@ const styles = StyleSheet.create({
   messageStatus: {
     color: '#666',
     fontSize: 12
-  },
-  recalledMessage: {
-    textDecorationLine: 'line-through'
   },
 });
 
