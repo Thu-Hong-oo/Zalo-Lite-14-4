@@ -1,6 +1,5 @@
-"use client"
-
-import { useState, useEffect } from "react"
+import { useState, useEffect, createContext, useContext } from "react"
+import { Routes, Route, Navigate, useNavigate } from "react-router-dom"
 import {
   Search,
   MessageCircle,
@@ -16,21 +15,171 @@ import {
   Users,
   User,
   ImageIcon,
+  LogOut
 } from "lucide-react"
 import "bootstrap/dist/css/bootstrap.min.css"
 import "./App.css"
+import { io } from "socket.io-client"
+import Login from "./components/Login"
+import ChatDirectly from "./components/ChatDirectly"
+import api from "./config/api"
 
-export default function App() {
+// Create socket context
+export const SocketContext = createContext(null)
+
+function MainApp({ setIsAuthenticated }) {
   const [activeTab, setActiveTab] = useState("Ưu tiên")
   const [currentSlide, setCurrentSlide] = useState(0)
+  const [user, setUser] = useState(null)
+  const [showProfileMenu, setShowProfileMenu] = useState(false)
+  const [chats, setChats] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [userCache, setUserCache] = useState({})
+  const [selectedChat, setSelectedChat] = useState(null)
+  const navigate = useNavigate()
+  const socket = useContext(SocketContext)
 
-  // Bootstrap requires JavaScript for some components
-  useEffect(() => {
-    // Import Bootstrap JS only on client side
-    if (typeof window !== "undefined") {
-      require("bootstrap/dist/js/bootstrap.bundle.min.js")
+  const fetchUserInfo = async (phone) => {
+    try {
+      if (userCache[phone]) {
+        return userCache[phone]
+      }
+
+      const response = await api.get(`/users/${phone}`)
+      if (response.data) {
+        setUserCache(prev => ({
+          ...prev,
+          [phone]: response.data
+        }))
+        return response.data
+      }
+    } catch (error) {
+      console.error("Get user info error:", error)
+      return null
     }
-  }, [])
+  }
+
+  const fetchConversations = async () => {
+    try {
+      if (chats.length === 0) {
+        setLoading(true)
+      }
+      
+      const response = await api.get('/chat/conversations')
+      
+      if (response.data.status === 'success' && response.data.data?.conversations) {
+        const transformedChats = await Promise.all(
+          response.data.data.conversations.map(async (conv) => {
+            const otherParticipant = conv.participant.isCurrentUser
+              ? conv.otherParticipant
+              : conv.participant
+
+            const userInfo = await fetchUserInfo(otherParticipant.phone)
+
+            return {
+              id: conv.conversationId,
+              title: userInfo?.name || otherParticipant.phone,
+              message: conv.lastMessage.content,
+              time: formatTime(conv.lastMessage.timestamp),
+              avatar: userInfo?.avatar,
+              isFromMe: conv.lastMessage.isFromMe,
+              unreadCount: conv.unreadCount || 0,
+              otherParticipantPhone: otherParticipant.phone,
+              senderName: conv.lastMessage.isFromMe ? 'Bạn' : (userInfo?.name || otherParticipant.phone)
+            }
+          })
+        )
+
+        setChats(transformedChats)
+        setError(null)
+      }
+    } catch (err) {
+      console.error("Error in fetchConversations:", err)
+      setError(err.message || "Failed to load conversations")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Initial fetch and user setup
+  useEffect(() => {
+    const userStr = localStorage.getItem("user")
+    if (userStr) {
+      try {
+        const userData = JSON.parse(userStr)
+        setUser(userData)
+      } catch (err) {
+        console.error("Error parsing user data:", err)
+      }
+    }
+    fetchConversations()
+  }, []) // Run only once on mount
+
+  // Socket event handlers
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNewMessage = async (data) => {
+      console.log("New message received:", data)
+      await fetchConversations()
+    }
+
+    const handleMessageRead = async (data) => {
+      console.log("Message read status updated:", data)
+      await fetchConversations()
+    }
+
+    const handleNewConversation = async (data) => {
+      console.log("New conversation created:", data)
+      await fetchConversations()
+    }
+
+    // Subscribe to events
+    socket.on("new_message", handleNewMessage)
+    socket.on("message_read", handleMessageRead)
+    socket.on("new_conversation", handleNewConversation)
+
+    // Polling as backup
+    const pollingInterval = setInterval(fetchConversations, 30000)
+
+    // Cleanup function
+    return () => {
+      socket.off("new_message", handleNewMessage)
+      socket.off("message_read", handleMessageRead)
+      socket.off("new_conversation", handleNewConversation)
+      clearInterval(pollingInterval)
+    }
+  }, [socket]) // Only re-run if socket changes
+
+  const formatTime = (timestamp) => {
+    const date = new Date(timestamp)
+    const now = new Date()
+    const diff = now - date
+
+    if (diff < 24 * 60 * 60 * 1000) {
+      return date.toLocaleTimeString("vi-VN", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    }
+    if (diff < 7 * 24 * 60 * 60 * 1000) {
+      const days = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"]
+      return days[date.getDay()]
+    }
+    return date.toLocaleDateString("vi-VN", {
+      day: "2-digit",
+      month: "2-digit",
+    })
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem("accessToken")
+    localStorage.removeItem("refreshToken")
+    localStorage.removeItem("user")
+    setIsAuthenticated(false)
+    navigate("/login", { replace: true })
+  }
 
   const handlePrevSlide = () => {
     setCurrentSlide((prev) => (prev > 0 ? prev - 1 : 0))
@@ -40,308 +189,453 @@ export default function App() {
     setCurrentSlide((prev) => (prev < 4 ? prev + 1 : 4))
   }
 
+  const handleChatClick = (chat) => {
+    setSelectedChat(chat.otherParticipantPhone)
+    navigate(`/app/chat/${chat.otherParticipantPhone}`)
+  }
+
+  const slides = [
+    {
+      id: 1,
+      image: "/images/slide1.png",
+      title: "Nhắn tin nhiều hơn, soạn thảo ít hơn",
+      description: "Sử dụng Tin Nhắn Nhanh để lưu sẵn các tin nhắn thường dùng và gửi nhanh trong hội thoại bất kỳ."
+    },
+    {
+      id: 2,
+      image: "/images/slide2.png",
+      title: "Trải nghiệm xuyên suốt",
+      description: "Kết nối và giải quyết công việc trên mọi thiết bị với dữ liệu luôn được đồng bộ."
+    },
+    {
+      id: 3,
+      image: "/images/slide3.png",
+      title: "Gửi file không giới hạn",
+      description: "Chia sẻ hình ảnh, file văn bản, bảng tính... với dung lượng không giới hạn."
+    },
+    {
+      id: 4,
+      image: "/images/slide4.png",
+      title: "Chat nhóm với đồng nghiệp",
+      description: "Trao đổi công việc nhóm một cách hiệu quả trong không gian làm việc riêng."
+    }
+  ]
+
   return (
     <div className="d-flex vh-100" style={{ backgroundColor: "#f0f5ff" }}>
-      {/* Left sidebar */}
-      <div className="d-flex flex-column align-items-center py-4" style={{ width: "64px", backgroundColor: "#0068ff" }}>
-        <div className="rounded-circle bg-white mb-4 overflow-hidden" style={{ width: "40px", height: "40px" }}>
-          <img src="/placeholder.svg?height=40&width=40" alt="Profile" className="w-100 h-100 object-fit-cover" />
+      {/* Sidebar */}
+      <div className="sidebar">
+        <div className="sidebar-top">
+          <div className="user-profile">
+            <div>
+              <img 
+                src={user?.avatar} 
+                alt={user?.name || "User"} 
+                className="avatar"
+                title={user?.name || "User"}
+                onError={(e) => {
+                  e.target.onerror = null;
+                  e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user?.name || "User")}&background=random`;
+                }}
+                style={{
+                  width: "48px",
+                  height: "48px",
+                  borderRadius: "50%",
+                  objectFit: "cover"
+                }}
+              />
+              {user?.status === "online" && (
+                <span className="status-badge"></span>
+              )}
+            </div>
+          </div>
+          <div className="nav-items">
+            <button className="nav-item active">
+              <MessageCircle size={24} />
+            </button>
+            <button className="nav-item">
+              <Users size={24} />
+            </button>
+            <button className="nav-item">
+              <FileText size={24} />
+            </button>
+            <button className="nav-item">
+              <Cloud size={24} />
+            </button>
+            <button className="nav-item">
+              <CheckSquare size={24} />
+            </button>
+            <button className="nav-item">
+              <Database size={24} />
+            </button>
+            <button className="nav-item">
+              <Briefcase size={24} />
+            </button>
+          </div>
         </div>
-
-        <div className="d-flex flex-column align-items-center gap-4 flex-grow-1">
-          <button
-            className="d-flex align-items-center justify-content-center text-white rounded"
-            style={{ width: "40px", height: "40px", backgroundColor: "#0055cc" }}
+        <div className="sidebar-bottom">
+          <button 
+            className="nav-item settings"
+            onClick={() => setShowProfileMenu(!showProfileMenu)}
           >
-            <MessageCircle size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <FileText size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <CheckSquare size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <Database size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <Cloud size={20} />
-          </button>
-          <button
-            className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent"
-            style={{ width: "40px", height: "40px" }}
-          >
-            <Briefcase size={20} />
+            <Settings size={24} />
+            {showProfileMenu && (
+              <div className="profile-menu">
+                <button className="menu-item">
+                  <User size={16} />
+                  Thông tin tài khoản
+                </button>
+                <hr />
+                <button className="menu-item danger" onClick={handleLogout}>
+                  <LogOut size={16} />
+                  Đăng xuất
+                </button>
+              </div>
+            )}
           </button>
         </div>
-
-        <button
-          className="d-flex align-items-center justify-content-center text-white border-0 bg-transparent mt-auto"
-          style={{ width: "40px", height: "40px" }}
-        >
-          <Settings size={20} />
-        </button>
       </div>
 
-      {/* Chat list */}
-      <div className="bg-white border-end" style={{ width: "320px" }}>
-        <div className="p-3">
-          <div className="position-relative">
-            <Search className="position-absolute start-0 top-50 translate-middle-y ms-3 text-secondary" size={18} />
-            <input
-              type="text"
-              placeholder="Tìm kiếm"
-              className="form-control bg-light rounded-pill ps-5 pe-5"
-              style={{ fontSize: "0.875rem" }}
-            />
-            <div className="position-absolute end-0 top-50 translate-middle-y me-2 d-flex gap-2">
-              <button className="btn btn-sm text-secondary p-1">
-                <User size={18} />
-              </button>
-              <button className="btn btn-sm text-secondary p-1">
-                <Users size={18} />
-              </button>
+      {/* Chat List */}
+      <div className="chat-list">
+        <div className="chat-list-header">
+          <div className="search-box">
+            <div className="search-input-container">
+              <Search size={20} className="search-icon" />
+              <input 
+                type="text" 
+                placeholder="Tìm kiếm bạn bè, nhóm chat" 
+                className="search-input"
+              />
             </div>
+            <button className="action-button" title="Thêm bạn">
+              <User size={20} />
+            </button>
+            <button className="action-button" title="Tạo nhóm chat">
+              <Users size={20} />
+            </button>
           </div>
         </div>
 
-        <div className="d-flex border-bottom">
+        <div className="chat-tabs">
           <button
-            className={`flex-grow-1 py-2 border-0 bg-transparent ${
-              activeTab === "Ưu tiên" ? "text-primary border-bottom border-3 border-primary" : "text-secondary"
-            }`}
-            style={{ fontSize: "0.875rem", fontWeight: "500" }}
+            className={`chat-tab ${activeTab === "Ưu tiên" ? "active" : ""}`}
             onClick={() => setActiveTab("Ưu tiên")}
           >
             Ưu tiên
           </button>
           <button
-            className={`flex-grow-1 py-2 border-0 bg-transparent ${
-              activeTab === "Khác" ? "text-primary border-bottom border-3 border-primary" : "text-secondary"
-            }`}
-            style={{ fontSize: "0.875rem", fontWeight: "500" }}
+            className={`chat-tab ${activeTab === "Khác" ? "active" : ""}`}
             onClick={() => setActiveTab("Khác")}
           >
             Khác
           </button>
-
-          <div className="d-flex align-items-center px-3">
-            <button className="btn btn-sm text-secondary p-0 d-flex align-items-center">
-              <span style={{ fontSize: "0.875rem" }}>Phân loại</span>
-              <ChevronLeft size={16} />
-            </button>
-            <button className="btn btn-sm text-secondary p-0 ms-2">
-              <MoreHorizontal size={18} />
-            </button>
-          </div>
         </div>
-
-        <div className="overflow-auto" style={{ height: "calc(100% - 110px)" }}>
-          {/* Chat items */}
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="SinhVien_Nganh_SE_Khoa"
-            message="Nguyen Thi Hanh: Các bạn hãy tha..."
-            time="3 ngày"
-            count="99+"
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="DHKHMT18ATT_QLDA"
-            message="Chưa có tin nhắn"
-            time=""
-            count="51"
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="422000191402_17BTT_HK2_..."
-            message="Em đứng ở V7.02 từ chiều"
-            time="2 ngày"
-            count="53"
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="CNM-HK2-24-25KTPM17BTT..."
-            message="Chưa có tin nhắn"
-            time=""
-            count="47"
-            badge="GK"
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="IUH HK2 2025 Big Data"
-            message="Bé Văn lêu khêu: Hình ảnh"
-            time="2 ngày"
-            count="99+"
-            hasImage={true}
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40"]}
-            name="Cloud của tôi"
-            message="Bạn: Hình ảnh"
-            time="3 phút"
-            hasImage={true}
-          />
-
-          <ChatItem
-            avatars={["/placeholder.svg?height=40&width=40", "/placeholder.svg?height=40&width=40"]}
-            name="PG/PB MC Mascot Eve..."
-            message="Mr Trị: Mình cần 2b PG tiếc ngoại ..."
-            time="32 phút"
-            count="84"
-            hasMore={true}
-          />
+        {/* Chat items */}
+        <div className="chat-items">
+          {loading ? (
+            <div className="loading-state">Đang tải...</div>
+          ) : error ? (
+            <div className="error-state">
+              <p>{error}</p>
+              <button onClick={fetchConversations}>Thử lại</button>
+            </div>
+          ) : chats.length === 0 ? (
+            <div className="empty-state">Không có cuộc trò chuyện nào</div>
+          ) : (
+            chats.map((chat) => (
+              <div
+                key={chat.id}
+                className={`chat-item ${selectedChat === chat.otherParticipantPhone ? 'active' : ''}`}
+                onClick={() => handleChatClick(chat)}
+              >
+                <div className="chat-avatar">
+                  {chat.avatar ? (
+                    <img src={chat.avatar} alt={chat.title} />
+                  ) : (
+                    <div className="avatar-placeholder">
+                      {chat.title.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  {chat.unreadCount > 0 && (
+                    <span className="unread-badge">{chat.unreadCount}</span>
+                  )}
+                </div>
+                <div className="chat-info">
+                  <div className="chat-header">
+                    <h3 className="chat-title">{chat.title}</h3>
+                    <span className="chat-time">{chat.time}</span>
+               
+                  </div>
+                     <p className={`chat-message ${chat.unreadCount > 0 ? 'unread' : ''}`}>
+                    {chat.message}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="flex-grow-1 d-flex flex-column align-items-center justify-content-center position-relative">
-        <div className="text-center" style={{ maxWidth: "32rem" }}>
-          <h1 className="fw-bold mb-4 fs-2">
-            Chào mừng đến với <span style={{ color: "#0068ff" }}>Zalo PC</span>!
-          </h1>
-          <p className="text-secondary mb-4">
-            Khám phá những tiện ích hỗ trợ làm việc và trò chuyện cùng người thân, bạn bè được tối ưu hoá cho máy tính
-            của bạn.
-          </p>
-
-          <div className="position-relative" style={{ height: "16rem" }}>
-            {currentSlide === 0 && (
-              <div className="position-absolute top-0 start-0 end-0 bottom-0 d-flex justify-content-center">
-                <img
-                  src="/welcome.png"
-                  alt="Zalo features"
-                  className="h-100 object-fit-contain"
-                />
+      {/* Main Content */}
+      <div className="main-content">
+        <Routes>
+          <Route path="chat/:phone" element={<ChatDirectly />} />
+          <Route path="/" element={
+            <div className="welcome-screen">
+              <div className="carousel-container">
+                <button className="carousel-btn prev" onClick={handlePrevSlide}>
+                  <ChevronLeft size={24} />
+                </button>
+                <div className="carousel-content">
+                  {slides[currentSlide] && (
+                    <>
+                      <img
+                        src={slides[currentSlide].image}
+                        alt={slides[currentSlide].title}
+                        className="carousel-image"
+                      />
+                      <div className="welcome-text">
+                        <h2>{slides[currentSlide].title}</h2>
+                        <p>{slides[currentSlide].description}</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <button className="carousel-btn next" onClick={handleNextSlide}>
+                  <ChevronRight size={24} />
+                </button>
               </div>
-            )}
-          </div>
-
-          <h3 className="fs-4 fw-medium mt-4" style={{ color: "#0068ff" }}>
-            Nhắn tin nhiều hơn, soạn thảo ít hơn
-          </h3>
-          <p className="text-secondary mt-2">
-            Sử dụng <strong>Tin Nhắn Nhanh</strong> để lưu sẵn các tin nhắn thường dùng và gửi nhanh trong hội thoại bất
-            kỳ.
-          </p>
-
-          <div className="d-flex justify-content-center mt-4">
-            <div className="d-flex gap-2">
-              {[0, 1, 2, 3, 4].map((index) => (
-                <button
-                  key={index}
-                  className="border-0 rounded-circle"
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    backgroundColor: currentSlide === index ? "#0068ff" : "#dee2e6",
-                  }}
-                  onClick={() => setCurrentSlide(index)}
-                />
-              ))}
+              
+              <div className="carousel-indicators">
+                {slides.map((slide, index) => (
+                  <button
+                    key={slide.id}
+                    className={`carousel-indicator ${currentSlide === index ? 'active' : ''}`}
+                    onClick={() => setCurrentSlide(index)}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        </div>
-
-        <button
-          className="position-absolute start-0 top-50 translate-middle-y ms-4 rounded-circle bg-white shadow-sm border-0 d-flex align-items-center justify-content-center"
-          style={{ width: "40px", height: "40px" }}
-          onClick={handlePrevSlide}
-        >
-          <ChevronLeft size={20} />
-        </button>
-
-        <button
-          className="position-absolute end-0 top-50 translate-middle-y me-4 rounded-circle bg-white shadow-sm border-0 d-flex align-items-center justify-content-center"
-          style={{ width: "40px", height: "40px" }}
-          onClick={handleNextSlide}
-        >
-          <ChevronRight size={20} />
-        </button>
+          } />
+        </Routes>
       </div>
     </div>
   )
 }
 
-function ChatItem({ avatars, name, message, time, count, badge, hasImage, hasMore }) {
+function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [socket, setSocket] = useState(null)
+
+  useEffect(() => {
+    const token = localStorage.getItem("accessToken")
+    if (token) {
+      setIsAuthenticated(true)
+      const newSocket = io("http://localhost:3000", {
+        auth: {
+          token
+        }
+      })
+
+      newSocket.on("connect", () => {
+        console.log("Socket connected!")
+      })
+
+      newSocket.on("disconnect", () => {
+        console.log("Socket disconnected!")
+      })
+
+      setSocket(newSocket)
+
+      return () => {
+        newSocket.close()
+      }
+    }
+  }, [isAuthenticated])
+
   return (
-    <div className="d-flex p-3 border-bottom cursor-pointer" style={{ cursor: "pointer" }}>
-      <div className="position-relative me-3">
+    <SocketContext.Provider value={socket}>
+      <Routes>
+        <Route
+          path="/login"
+          element={
+            !isAuthenticated ? (
+              <Login setIsAuthenticated={setIsAuthenticated} />
+            ) : (
+              <Navigate to="/app" replace />
+            )
+          }
+        />
+        <Route
+          path="/app/*"
+          element={
+            isAuthenticated ? (
+              <MainApp setIsAuthenticated={setIsAuthenticated} />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+        <Route path="/" element={<Navigate to="/app" replace />} />
+      </Routes>
+    </SocketContext.Provider>
+  )
+}
+
+function ChatItem({ avatars, name, message, time, count, hasMore }) {
+  return (
+    <div className="chat-item" style={{ 
+      padding: '12px 16px',
+      display: 'flex',
+      alignItems: 'flex-start',
+      borderBottom: '1px solid #E6E8EB',
+      cursor: 'pointer',
+      ':hover': {
+        backgroundColor: '#f5f5f5'
+      }
+    }}>
+      <div style={{ position: 'relative', marginRight: '12px' }}>
         {avatars.length === 1 ? (
-          <div className="rounded-circle overflow-hidden" style={{ width: "48px", height: "48px" }}>
-            <img src={avatars[0] || "/placeholder.svg"} alt="" className="w-100 h-100 object-fit-cover" />
+          <div style={{ 
+            width: '48px', 
+            height: '48px', 
+            borderRadius: '12px',
+            overflow: 'hidden'
+          }}>
+            <img 
+              src={avatars[0]} 
+              alt="" 
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover'
+              }}
+            />
           </div>
         ) : (
-          <div className="position-relative" style={{ width: "48px", height: "48px" }}>
-            <div
-              className="position-absolute top-0 start-0 rounded-circle overflow-hidden border border-2 border-white"
-              style={{ width: "32px", height: "32px" }}
-            >
-              <img src={avatars[0] || "/placeholder.svg"} alt="" className="w-100 h-100 object-fit-cover" />
+          <div style={{ 
+            position: 'relative',
+            width: '48px',
+            height: '48px'
+          }}>
+            <div style={{
+              position: 'absolute',
+              top: '0',
+              left: '0',
+              width: '32px',
+              height: '32px',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              border: '2px solid white'
+            }}>
+              <img 
+                src={avatars[0]} 
+                alt=""
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover'
+                }}
+              />
             </div>
-            <div
-              className="position-absolute bottom-0 end-0 rounded-circle overflow-hidden border border-2 border-white"
-              style={{ width: "32px", height: "32px" }}
-            >
-              <img src={avatars[1] || "/placeholder.svg"} alt="" className="w-100 h-100 object-fit-cover" />
+            <div style={{
+              position: 'absolute',
+              bottom: '0',
+              right: '0',
+              width: '32px',
+              height: '32px',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              border: '2px solid white'
+            }}>
+              <img 
+                src={avatars[1]} 
+                alt=""
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover'
+                }}
+              />
             </div>
-          </div>
-        )}
-
-        {badge && (
-          <div
-            className="position-absolute bottom-0 start-0 translate-middle rounded-circle bg-info text-white d-flex align-items-center justify-content-center fw-bold"
-            style={{ width: "20px", height: "20px", fontSize: "10px" }}
-          >
-            {badge}
           </div>
         )}
       </div>
 
-      <div className="flex-grow-1 min-width-0">
-        <div className="d-flex justify-content-between align-items-start">
-          <h3 className="fw-medium text-truncate mb-0" style={{ fontSize: "0.875rem" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          marginBottom: '4px'
+        }}>
+          <h3 style={{ 
+            margin: 0,
+            fontSize: '14px',
+            fontWeight: '500',
+            color: '#081C36',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}>
             {name}
           </h3>
-          {time && (
-            <span className="text-secondary ms-1" style={{ fontSize: "0.75rem", whiteSpace: "nowrap" }}>
-              {time}
-            </span>
-          )}
+          <span style={{ 
+            fontSize: '12px',
+            color: '#7589A3',
+            whiteSpace: 'nowrap',
+            marginLeft: '8px'
+          }}>
+            {time}
+          </span>
         </div>
 
-        <div className="d-flex align-items-center mt-1">
-          <p className="text-secondary text-truncate mb-0 flex-grow-1" style={{ fontSize: "0.875rem" }}>
-            {hasImage && <ImageIcon size={14} className="me-1" style={{ display: "inline" }} />}
+        <div style={{ 
+          display: 'flex',
+          alignItems: 'center'
+        }}>
+          <p style={{ 
+            margin: 0,
+            fontSize: '13px',
+            color: '#7589A3',
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}>
             {message}
           </p>
 
-          <div className="d-flex align-items-center ms-2">
+          <div style={{ 
+            display: 'flex',
+            alignItems: 'center',
+            marginLeft: '8px'
+          }}>
             {count && (
-              <span className="badge rounded-pill text-bg-primary" style={{ fontSize: "0.75rem", minWidth: "20px" }}>
+              <span style={{ 
+                backgroundColor: '#0068FF',
+                color: 'white',
+                padding: '2px 6px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: '500',
+                minWidth: '20px',
+                textAlign: 'center'
+              }}>
                 {count}
               </span>
             )}
             {hasMore && (
-              <span className="badge rounded-pill bg-secondary ms-1" style={{ fontSize: "0.75rem" }}>
-                5+
+              <span style={{ 
+                backgroundColor: '#E6E8EB',
+                color: '#7589A3',
+                padding: '2px 6px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                marginLeft: '4px'
+              }}>
+                +
               </span>
             )}
           </div>
@@ -349,4 +643,6 @@ function ChatItem({ avatars, name, message, time, count, badge, hasImage, hasMor
       </div>
     </div>
   )
-} 
+}
+
+export default App 

@@ -35,7 +35,7 @@ Content-Type: application/json
 
 {
     "phone": "0376963653",
-    "password": "12345678"
+    "password": "123456"
 }
 
 ### Làm mới token
@@ -127,7 +127,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZSI6Ijg0Mzc2O
 
 ### Gửi tin nhắn văn bản
 POST http://localhost:3000/api/message/send
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZSI6Ijg0Mzc2OTYzNjUzIiwiaWF0IjoxNzQ0NjA4Mzk5LCJleHAiOjE3NDQ2OTQ3OTl9.NNQgCxaqIeZj-nv8zteiicSpF_CVsKNOUnlc5ZmGgV4
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZSI6Ijg0Mzc2OTYzNjUzIiwiaWF0IjoxNzQ0NjgwNjU2LCJleHAiOjE3NDQ3NjcwNTZ9.l_EW338cI38JSR3L6RwK6gNyQ_wpCX6j1HiroPMhWas
 Content-Type: application/json
 
 {
