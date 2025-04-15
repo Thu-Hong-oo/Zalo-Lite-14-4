@@ -11,17 +11,32 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  Alert,
+  Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { io } from "socket.io-client";
 import { getChatHistory, sendMessage } from "../modules/chat/controller";
 import { getAccessToken } from "../services/storage";
+import * as ImagePicker from 'expo-image-picker';
+import { Video } from 'expo-av';
+import * as MediaLibrary from 'expo-media-library';
+import * as DocumentPicker from 'expo-document-picker';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const ChatDirectlyScreen = ({ route, navigation }) => {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [socket, setSocket] = useState(null);
+  const [selectedVideo, setSelectedVideo] = useState(null);
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [videoStatus, setVideoStatus] = useState({});
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [showFilePreview, setShowFilePreview] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const flatListRef = useRef(null);
   const { title, otherParticipantPhone, avatar } = route.params;
 
@@ -175,42 +190,161 @@ const ChatDirectlyScreen = ({ route, navigation }) => {
     }
   };
 
+  const pickImage = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 1,
+      });
+
+      if (!result.canceled) {
+        const file = {
+          uri: result.assets[0].uri,
+          type: 'image/jpeg',
+          name: 'image.jpg'
+        };
+        setSelectedFiles([file]);
+        setShowFilePreview(true);
+      }
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể chọn ảnh');
+    }
+  };
+
+  const pickVideo = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        allowsEditing: true,
+        quality: 1,
+      });
+
+      if (!result.canceled) {
+        setSelectedVideo(result.assets[0].uri);
+        setShowVideoPreview(true);
+      }
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể chọn video');
+    }
+  };
+
+  const pickDocument = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true
+      });
+
+      if (result.type === 'success') {
+        const file = {
+          uri: result.uri,
+          type: result.mimeType,
+          name: result.name
+        };
+        setSelectedFiles([file]);
+        setShowFilePreview(true);
+      }
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể chọn file');
+    }
+  };
+
+  const handleUpload = async () => {
+    if (selectedFiles.length === 0) return;
+
+    try {
+      const formData = new FormData();
+      selectedFiles.forEach((file, index) => {
+        formData.append('files', {
+          uri: file.uri,
+          type: file.type,
+          name: file.name
+        });
+      });
+
+      const token = await getAccessToken();
+      const response = await fetch('http://192.168.2.118:3000/api/chat/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
+        },
+        body: formData,
+      });
+
+      const result = await response.json();
+      
+      if (result.status === 'success') {
+        result.data.urls.forEach((url, index) => {
+          socket.emit("send-message", {
+            receiverPhone: otherParticipantPhone,
+            fileUrl: url,
+            fileType: selectedFiles[index].type
+          });
+        });
+        
+        setSelectedFiles([]);
+        setShowFilePreview(false);
+      } else {
+        Alert.alert('Lỗi', result.message || 'Upload thất bại');
+      }
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể upload file');
+    }
+  };
+
   const renderMessage = ({ item }) => {
-    //nếu senderPhone khác otherParticipantPhone thì là tin nhắn của mình
-    const isMyMessage =
-      item.senderPhone != otherParticipantPhone || item.senderPhone == "me";
+    const isMyMessage = item.senderPhone !== otherParticipantPhone;
 
     return (
-      <View
-        style={[
-          styles.messageContainer,
-          isMyMessage ? styles.myMessage : styles.otherMessage,
-        ]}
-      >
-        <Text
-          style={[
-            styles.messageText,
-            isMyMessage ? styles.myMessageText : styles.otherMessageText,
-          ]}
-        >
-          {item.content}
+      <View style={[styles.messageContainer, isMyMessage ? styles.myMessage : styles.otherMessage]}>
+        {item.type === 'text' ? (
+          <Text style={styles.messageText}>{item.content}</Text>
+        ) : item.type === 'file' ? (
+          <TouchableOpacity 
+            onPress={() => {
+              if (item.fileType.startsWith('image/')) {
+                setSelectedVideo(item.content);
+                setShowVideoPreview(true);
+              } else if (item.fileType.startsWith('video/')) {
+                setSelectedVideo(item.content);
+                setShowVideoPreview(true);
+              } else {
+                // Handle other file types
+                Alert.alert('File', 'Mở file');
+              }
+            }}
+          >
+            {item.fileType.startsWith('image/') ? (
+              <Image 
+                source={{ uri: item.content }} 
+                style={styles.imgPreview}
+                resizeMode="cover"
+              />
+            ) : item.fileType.startsWith('video/') ? (
+              <View style={styles.videoContainer}>
+                <Video
+                  source={{ uri: item.content }}
+                  style={styles.videoPreview}
+                  resizeMode="contain"
+                  useNativeControls
+                  isLooping={true}
+                  shouldPlay={true}
+                />
+              </View>
+            ) : (
+              <View style={styles.fileContainer}>
+                <Ionicons name="document" size={24} color="white" />
+                <Text style={styles.fileName}>{item.content.split('/').pop()}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        ) : null}
+        <Text style={styles.messageTime}>
+          {new Date(item.timestamp).toLocaleTimeString()}
         </Text>
-        <View style={styles.messageFooter}>
-          <Text style={styles.messageTime}>
-            {new Date(item.timestamp).toLocaleTimeString()}
-          </Text>
-          {isMyMessage && (
-            <Text style={styles.messageStatus}>
-              {item.status === "sending"
-                ? "Đang gửi..."
-                : item.status === "sent"
-                ? "✓"
-                : item.status === "error"
-                ? "✕"
-                : ""}
-            </Text>
-          )}
-        </View>
       </View>
     );
   };
@@ -408,6 +542,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#E5E5E5",
   },
+  imgPreview:{
+    width: 300,
+    height:300 ,
+    borderRadius: 5,
+  },
   attachButton: {
     padding: 5,
     marginRight: 5,
@@ -443,6 +582,45 @@ const styles = StyleSheet.create({
   },
   otherMessageText: {
     color: "black",
+  },
+  filePreview: {
+    width: 100,
+    height: 100,
+    borderRadius: 5,
+  },
+  videoContainer: {
+    width: 300,
+    height: 400,
+    borderRadius: 5,
+    position: "relative",
+    backgroundColor: '#1877f2',
+    padding:10,
+  },
+  videoPreview: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 5,
+  },
+  playButton: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    borderRadius: 5,
+  },
+  fileContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 5,
+  },
+  fileName: {
+    color: "#000",
+    fontSize: 12,
+    marginLeft: 5,
   },
 });
 
